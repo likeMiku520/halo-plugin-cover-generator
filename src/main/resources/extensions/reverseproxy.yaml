@@ -1,0 +1,13 @@
+# 内置封面字体(约 2MB)的静态资源代理(M7 字体出包):
+# 字体不再经 Vite ?url 打进 UI 的 IIFE 单文件(此前 main.js 3.05MB,字体
+# base64 内联约占 2.8MB),改为 JAR 内 static/fonts 按需加载。
+# 访问路径:/plugins/cover-generator/assets/fonts/DouyinSansBold.otf
+# 规则文档:https://docs.halo.run/developer-guide/plugin/api-reference/server/reverseproxy
+apiVersion: plugin.halo.run/v1alpha1
+kind: ReverseProxy
+metadata:
+  name: cover-generator-font-reverse-proxy
+rules:
+  - path: /fonts/**
+    file:
+      directory: static/fonts

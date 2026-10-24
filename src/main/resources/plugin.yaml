@@ -1,0 +1,31 @@
+# Refer https://docs.halo.run/developer-guide/plugin/basics/manifest
+
+apiVersion: plugin.halo.run/v1alpha1
+kind: Plugin
+metadata:
+  # The name defines how the plugin is invoked, A unique name
+  name: cover-generator
+spec:
+  enabled: true
+  # 保持三段式版本号:bundler-kit 按它推导 UI 产物格式(ESM/IIFE)与落位,
+  # 两段式(如 >=2.27)会被解析器静默回退 IIFE;ui/build.gradle 已将其纳入增量构建输入
+  requires: ">=2.26.0"
+  author:
+    name: fufu大王
+    website: https://blog.fufu520.cn
+  # 远程图标:随插件分发的是 logo.png,此处指向站点图床,便于应用市场展示统一形象
+  logo: https://blog.fufu520.cn/upload/fufu_touming.webp
+  homepage: https://github.com/likeMiku520/halo-plugin-cover-generator
+  repo: https://github.com/likeMiku520/halo-plugin-cover-generator
+  issues: https://github.com/likeMiku520/halo-plugin-cover-generator/issues
+  # 跨文件契约:名称须与 extensions/setting.yaml 的 metadata.name 一致
+  settingName: cover-generator-settings
+  # 与 ui/src/composables/usePluginSettings.ts 的 CONFIG_MAP_PATH 一致
+  configMapName: cover-generator-configmap
+  displayName: "封面生成器"
+  description: "在 Console 内为文章生成封面图,支持自由布局与自定义元素,保存为附件并绑定文章封面"
+  # GPL-3.0:本项目派生自 baoxinwen/halo-plugin-cover-generator(GPL-3.0),
+  # 按其条款继续以同一许可分发;任何人可自由使用、修改与再分发
+  license:
+    - name: "GPL-3.0"
+      url: "https://github.com/likeMiku520/halo-plugin-cover-generator/blob/main/LICENSE"

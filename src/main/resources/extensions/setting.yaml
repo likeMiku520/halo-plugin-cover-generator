@@ -1,0 +1,50 @@
+apiVersion: v1alpha1
+kind: Setting
+metadata:
+  name: cover-generator-settings
+spec:
+  displayName: 封面生成器
+  forms:
+    # 跨文件契约:表单字段的存取键、默认值与值语义须与
+    # ui/src/composables/usePluginSettings.ts 的 FORM_GROUP 与 DEFAULTS 保持一致
+    - group: base
+      label: 基础设置
+      formSchema:
+        - $formkit: text
+          name: watermark
+          label: 默认水印文案
+          value: ""
+          placeholder: 例如 example.com
+          help: 默认水印文案,空 = 不显示水印
+        - $formkit: attachment
+          name: logoUrl
+          label: 默认 Logo 图片
+          value: ""
+          accepts:
+            - "image/*"
+          help: 默认 Logo 图片 URL(附件);空 = 初始隐藏 Logo
+        - $formkit: attachment
+          name: fontUrl
+          label: 自定义字体
+          value: ""
+          accepts:
+            # MIME 写法(与上方 image/* 同款语义):宿主以正则匹配附件 mediaType,
+            # 扩展名写法(.otf)只是碰巧命中 font/otf,mediaType 为 octet-stream 时会误禁(评审#8)
+            - "font/otf"
+            - "font/ttf"
+            - "font/woff"
+            - "font/woff2"
+          help: 自定义字体 URL(附件);空 = 内置抖音美好体
+        # 存储策略与附件分组此前是 text 输入(要求用户手写资源名),实机反馈
+        # 「不知道该填什么」并把分组显示名当成资源名填错。改用 Halo 2.4.0 起的
+        # 官方选择器:保存值即资源 metadata.name,与上传接口所需参数一致
+        - $formkit: attachmentPolicySelect
+          name: attachmentPolicy
+          label: 附件存储策略
+          value: ""
+          help: 上传封面附件所用的存储策略;留空则由 Halo 使用默认策略
+        - $formkit: attachmentGroupSelect
+          name: attachmentGroup
+          label: 附件分组
+          value: ""
+          help: 上传封面附件保存到的分组;留空则不指定分组

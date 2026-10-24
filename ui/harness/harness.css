@@ -1,0 +1,31 @@
+/* 模拟 Console 外壳:顶栏 + 页面底色,给工作台真实的落位环境 */
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: #edeff3;
+  font-family: 'Segoe UI Variable Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+}
+.console-fake {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px;
+  background: rgb(255 255 255 / 78%);
+  border-bottom: 1px solid rgb(0 0 0 / 8%);
+  font-size: 13px;
+  color: #6e6e73;
+}
+.console-fake b { color: #1d1d1f; font-weight: 600; }
+/* 工作台在 Console 内的高度契约是 calc(100dvh - 150px)(顶栏+页头);
+ * harness 用 48px 顶栏近似,覆写高度让内容充满剩余视口。
+ * 捕获窗格仅 800px 宽,会落入组件的 ≤960px 堆叠断行;
+ * 视觉验证针对桌面双栏版式,这里强制维持双栏与满高(仅 harness 生效)。 */
+.cover-workbench { height: calc(100dvh - 48px) !important; }
+@media (max-width: 960px) {
+  .cover-workbench {
+    grid-template-columns: 400px minmax(0, 1fr) !important;
+    height: calc(100dvh - 48px) !important;
+    min-height: 520px !important;
+  }
+}

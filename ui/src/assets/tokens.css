@@ -1,0 +1,329 @@
+/* ============================================================
+ * 封面工坊 · 设计 Token(唯一风格来源)
+ * 方向:苹果工作台(apple-design)——浅色材质与光、OS 级层次
+ * 分层:primitive(原始值)→ semantic(语义别名)
+ * 组件只允许引用 --sd-*;禁止在组件内写死颜色/圆角/时长
+ * CSS 隔离:本 UI 运行于 Halo Console 页面内,自定义属性一律
+ * 定义在工作台根类 .cover-workbench 上(代替前身 :root),
+ * 组件经 CSS 继承取值,不向 Console 全局泄漏任何变量。
+ * ============================================================ */
+
+.cover-workbench {
+  /* ---------- Primitive · 色彩 ---------- */
+  /* 中性(冷灰,Apple 墨阶) */
+  --pit-ink-900: #1d1d1f;
+  --pit-ink-500: #6e6e73;
+  --pit-ink-line: rgb(0 0 0 / 8%);
+  --pit-ink-line-strong: rgb(0 0 0 / 12%);
+
+  /* 强调色（主题青 #39C5BB）；深档供 CTA 渐变与白字底，
+   * 两端与白字对比度均 ≥4.5:1（accent-strong 5.2:1、accent-deep 6.1:1，达 AA） */
+  --pit-blue-500: #39c5bb;
+  --pit-blue-600: #2aa79e;
+  --pit-blue-700: #18756e;
+  /* 浅档供焦点内圈与悬停描边：对底色 3.2:1，仅作图形指示不承载文字 */
+  --pit-teal-300: #6fd8d0;
+
+  /* 功能色;red-text 供小号错误文字用(#ff3b30 在卡片材质上仅 3.49:1,
+   * 深档 #d70015 实测 5.4:1 达 AA,同属苹果系统红一族) */
+  --pit-red: #ff3b30;
+  --pit-red-text: #d70015;
+  --pit-green: #28c840;
+  --pit-yellow: #febc2e;
+  --pit-red-light: #ff5f57;
+
+  /* 材质白(半透明层级);纯白基准供滑杆浮钮/强调底色上的文字等着色引用 */
+  --pit-white: #ffffff;
+  --pit-white-35: rgb(255 255 255 / 35%);
+  --pit-white-50: rgb(255 255 255 / 50%);
+  --pit-white-58: rgb(255 255 255 / 58%);
+  --pit-white-65: rgb(255 255 255 / 65%);
+  --pit-white-72: rgb(255 255 255 / 72%);
+  --pit-white-80: rgb(255 255 255 / 80%);
+  --pit-white-85: rgb(255 255 255 / 85%);
+  --pit-white-90: rgb(255 255 255 / 90%);
+
+  /* 阴影墨色(冷调,非纯黑) */
+  --pit-shadow-6: rgb(30 40 60 / 6%);
+  --pit-shadow-10: rgb(30 40 60 / 10%);
+  --pit-shadow-14: rgb(40 50 70 / 14%);
+  --pit-shadow-22: rgb(40 50 70 / 22%);
+  --pit-blue-glow-32: rgb(57 197 187 / 34%);
+  --pit-blue-glow-40: rgb(57 197 187 / 42%);
+
+  /* ---------- Primitive · 字体 ---------- */
+  --pit-font-ui:
+    'Segoe UI Variable Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --pit-font-mono: Consolas, 'SF Mono', 'Cascadia Mono', monospace;
+
+  /* ---------- Primitive · 字号 ---------- */
+  /* 五档收敛(此前 10.5/11/11.5/12/12.5/13/14/20 八档散值):
+   * xs=meta/眉标, sm=提示与次级说明, md=标签/次级按钮, base=输入与主动作, lg=面板标题 */
+  --pit-fs-xs: 11px;
+  --pit-fs-sm: 12px;
+  --pit-fs-md: 13px;
+  --pit-fs-base: 14px;
+  --pit-fs-lg: 20px;
+
+  /* ---------- Primitive · 间距 ---------- */
+  --pit-sp-1: 4px;
+  --pit-sp-2: 8px;
+  --pit-sp-3: 12px;
+  --pit-sp-4: 14px;
+  --pit-sp-5: 18px;
+  --pit-sp-6: 22px;
+  --pit-sp-7: 24px;
+
+  /* ---------- Primitive · 圆角 ---------- */
+  --pit-r-sm: 8px;
+  --pit-r-md: 10px;
+  --pit-r-cta: 12px;
+  --pit-r-card: 14px;
+  --pit-r-window: 18px;
+  --pit-r-panel: 22px;
+  --pit-r-pill: 999px;
+
+  /* ---------- Primitive · 动效 ---------- */
+  --pit-ease-fluid: cubic-bezier(0.32, 0.72, 0, 1); /* 物理/入场(Apple 抽屉曲线) */
+  --pit-dur-press: 120ms; /* 按压回弹 */
+  --pit-dur-hover: 200ms; /* 悬停/颜色 */
+  --pit-dur-move: 250ms; /* 位移/缩放反馈 */
+  --pit-dur-enter: 550ms; /* 面板入场(仅挂载时一次) */
+  --pit-dur-window: 650ms; /* 预览窗入场(主体最后到位) */
+  --pit-delay-1: 60ms; /* 入场错峰 1(首卡) */
+  --pit-delay-2: 110ms; /* 入场错峰 2 */
+  --pit-delay-5: 260ms; /* 入场错峰 5(动作区) */
+  --pit-delay-window: 140ms; /* 预览窗入场延迟 */
+
+  /* ============================================================
+   * Semantic · 语义别名(组件唯一可见层)
+   * ============================================================ */
+
+  /* 文本 */
+  --sd-text: var(--pit-ink-900);
+  --sd-text-2: var(--pit-ink-500);
+  --sd-line: var(--pit-ink-line);
+  --sd-line-strong: var(--pit-ink-line-strong);
+  --sd-danger: var(--pit-red); /* 非文字用途(边框/描边) */
+  --sd-danger-text: var(--pit-red-text); /* 小号错误文字专用(AA 达标档) */
+
+  /* 强调与焦点 */
+  --sd-accent: var(--pit-blue-500);
+  --sd-accent-strong: var(--pit-blue-600);
+  --sd-accent-deep: var(--pit-blue-700); /* CTA 渐变深档(白字 AA 达标端) */
+  --sd-text-accent: var(--pit-blue-700); /* 小号强调文字(accent-strong 在卡片材质上 4.49:1 踩线,深档 5.99:1) */
+  --sd-text-on-accent: var(--pit-white); /* 强调底色上的文字(白) */
+  --sd-focus-ring: rgb(57 197 187 / 30%); /* 环偏弱则不可辨,提至 30% 与更浅的青调配合 */
+  --sd-focus-border: var(--pit-teal-300); /* 焦点内圈用浅青:在深色封面上比实心主色更清晰 */
+
+  /* 材质表面 */
+  --sd-surface-panel: var(--pit-white-58);
+  --sd-surface-card: var(--pit-white-72);
+  --sd-surface-control: #ffffff;
+  --sd-surface-hover: var(--pit-white-90);
+  --sd-surface-raised: var(--pit-white-85); /* 次级按钮/控件浮起材质 */
+  --sd-surface-titlebar: var(--pit-white-50); /* 预览窗标题条 */
+  --sd-surface-thumb: var(--pit-white); /* 滑杆/开关浮钮 */
+  --sd-edge-bright: var(--pit-white-65); /* 顶缘受光 */
+  --sd-edge-bright-strong: var(--pit-white-90);
+  --sd-edge-hairline: var(--pit-white-80); /* 卡内芯发丝线 */
+  --sd-edge-inset-light: var(--pit-white-35); /* CTA 上缘内受光 */
+  --sd-accent-dot: linear-gradient(120deg, #f6d365, #fda085); /* 面板头暖色圆点(日落橙同源) */
+
+  /* 阴影(环境光自上而下,方向一致) */
+  --sd-shadow-panel: 0 24px 70px var(--pit-shadow-14);
+  --sd-shadow-window: 0 40px 100px var(--pit-shadow-22);
+  --sd-shadow-card: 0 1px 2px var(--pit-shadow-6);
+  --sd-shadow-swatch: 0 4px 12px var(--pit-shadow-10);
+  --sd-shadow-thumb: 0 0.5px 3px rgb(0 0 0 / 30%), 0 4px 9px rgb(0 0 0 / 12%);
+  --sd-shadow-cta: 0 8px 20px var(--pit-blue-glow-32);
+  --sd-shadow-cta-hover: 0 10px 26px var(--pit-blue-glow-40);
+
+  /* 圆角(同心:外壳 > 内芯) */
+  --sd-r-panel: var(--pit-r-panel);
+  --sd-r-window: var(--pit-r-window);
+  --sd-r-card: var(--pit-r-card);
+  --sd-r-cta: var(--pit-r-cta);
+  --sd-r-control: var(--pit-r-md);
+  --sd-r-small: var(--pit-r-sm);
+  --sd-r-pill: var(--pit-r-pill);
+
+  /* 字体 */
+  --sd-font: var(--pit-font-ui);
+  --sd-font-mono: var(--pit-font-mono);
+
+  /* 字号(组件唯一可见层) */
+  --sd-fs-xs: var(--pit-fs-xs);
+  --sd-fs-sm: var(--pit-fs-sm);
+  --sd-fs-md: var(--pit-fs-md);
+  --sd-fs-base: var(--pit-fs-base);
+  --sd-fs-lg: var(--pit-fs-lg);
+
+  /* 动效 */
+  --sd-ease: var(--pit-ease-fluid);
+  --sd-dur-press: var(--pit-dur-press);
+  --sd-dur-hover: var(--pit-dur-hover);
+  --sd-dur-move: var(--pit-dur-move);
+  --sd-dur-enter: var(--pit-dur-enter);
+  --sd-dur-window: var(--pit-dur-window);
+  --sd-delay-1: var(--pit-delay-1);
+  --sd-delay-2: var(--pit-delay-2);
+  --sd-delay-5: var(--pit-delay-5);
+  --sd-delay-window: var(--pit-delay-window);
+
+  /* 窗口红绿灯(预览窗装饰) */
+  --sd-tl-green: var(--pit-green);
+  --sd-tl-yellow: var(--pit-yellow);
+  --sd-tl-red: var(--pit-red-light);
+}
+
+/* 入场位移:面板/卡片/预览窗共用一式(H2 收敛,原 rise/gp-rise/win-rise 三份重复)。
+ * keyframes 须定义在顶层;sd- 前缀避免与宿主 Console 冲突,不泄露任何变量。 */
+@keyframes sd-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.985);
+  }
+}
+
+/* ============================================================
+ * 共享组件类(B1 收敛):填充式输入件、次级按钮、浮层外壳、
+ * 菜单条目此前在 4 个组件内各写一份,且已出现字号/圆角漂移
+ * (12/12.5/13px、pill/CTA 圆角并存);统一在此定义,组件以
+ * class 套用,布局类属性(宽度/flex/定位)仍归组件自持。
+ * 仅锚定 .cover-workbench,不向宿主 Console 泄漏。
+ * ============================================================ */
+
+/* ---- 填充式输入件:静默态 1px 内圈,hover 现线,聚焦蓝环 ----
+ * 文本输入框任何聚焦形态均命中 :focus-visible;div 容器(媒体字段)
+ * 仅键盘聚焦命中,鼠标点击不出环。 */
+.cover-workbench .sd-field {
+  background: var(--sd-surface-control);
+  border: 1px solid transparent;
+  border-radius: var(--sd-r-control);
+  color: var(--sd-text);
+  font-size: var(--sd-fs-base);
+  font-family: var(--sd-font);
+  padding: 9px 12px;
+  box-shadow: 0 0 0 1px var(--sd-edge-bright-strong) inset, 0 1px 2px var(--sd-shadow-card);
+  transition:
+    border-color var(--sd-dur-hover) var(--sd-ease),
+    box-shadow var(--sd-dur-hover) var(--sd-ease);
+}
+.cover-workbench .sd-field:hover {
+  border-color: var(--sd-line);
+}
+.cover-workbench .sd-field:focus-visible {
+  outline: none;
+  border-color: var(--sd-focus-border);
+  box-shadow: 0 0 0 3.5px var(--sd-focus-ring);
+}
+.cover-workbench .sd-field::placeholder {
+  color: var(--sd-text-2); /* text-3 仅 2.3:1,提示性占位须达 AA */
+}
+.cover-workbench .sd-field--mono {
+  font-family: var(--sd-font-mono);
+  font-size: var(--sd-fs-sm);
+}
+
+/* ---- 次级按钮两级:quiet(浮起材质) / ghost(透明);统一药丸圆角 ----
+ * primary(CTA 渐变)只属于动作条,不设共享类。 */
+.cover-workbench .sd-btn-quiet {
+  background: var(--sd-surface-raised);
+  border: none;
+  border-radius: var(--sd-r-pill);
+  color: var(--sd-text);
+  font-size: var(--sd-fs-md);
+  font-weight: 500;
+  font-family: var(--sd-font);
+  padding: 8px 14px;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px var(--sd-line) inset;
+  transition:
+    background var(--sd-dur-hover) var(--sd-ease),
+    transform var(--sd-dur-press) ease-out;
+}
+.cover-workbench .sd-btn-quiet:hover:not(:disabled) {
+  background: var(--sd-surface-hover);
+}
+.cover-workbench .sd-btn-quiet:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.cover-workbench .sd-btn-quiet:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cover-workbench .sd-btn-quiet:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3.5px var(--sd-focus-ring),
+    0 0 0 1px var(--sd-focus-border);
+}
+.cover-workbench .sd-btn-ghost {
+  background: transparent;
+  border: none;
+  border-radius: var(--sd-r-pill);
+  color: var(--sd-text-2);
+  font-size: var(--sd-fs-md);
+  font-weight: 500;
+  font-family: var(--sd-font);
+  padding: 8px 12px;
+  cursor: pointer;
+  transition:
+    background var(--sd-dur-hover) var(--sd-ease),
+    color var(--sd-dur-hover) var(--sd-ease);
+}
+.cover-workbench .sd-btn-ghost:hover:not(:disabled) {
+  background: var(--sd-surface-hover);
+  color: var(--sd-text);
+}
+.cover-workbench .sd-btn-ghost:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cover-workbench .sd-btn-ghost:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px var(--sd-focus-ring);
+}
+
+/* ---- 浮层外壳:向上弹的菜单/下拉共用视觉壳(定位各组件自持) ---- */
+.cover-workbench .sd-pop {
+  background: var(--sd-surface-control);
+  border: 1px solid var(--sd-line);
+  border-radius: var(--sd-r-control);
+  box-shadow: var(--sd-shadow-panel);
+  padding: var(--pit-sp-1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 30;
+}
+
+/* ---- 菜单条目(PNG 倍率菜单 / 文章下拉共用) ---- */
+.cover-workbench .sd-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--sd-r-control);
+  color: var(--sd-text);
+  font-size: var(--sd-fs-md);
+  font-family: var(--sd-font);
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: background var(--sd-dur-hover) var(--sd-ease);
+}
+.cover-workbench .sd-menu-item:hover {
+  background: var(--sd-surface-hover);
+}
+.cover-workbench .sd-menu-item:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px var(--sd-focus-ring);
+}
+.cover-workbench .sd-menu-item small {
+  display: block;
+  color: var(--sd-text-2); /* text-3 仅 2.3:1,说明文字须达 AA */
+  font-size: var(--sd-fs-xs);
+  font-weight: 400;
+}

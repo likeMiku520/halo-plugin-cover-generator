@@ -1,0 +1,29 @@
+# 封面生成器(Cover Generator)
+
+一款 Halo 2.x Console 插件:在 Console 内为文章生成封面图,支持多分辨率与自由布局,一键保存为站点附件并绑定文章封面。
+
+- 作者:fufu大王 — <https://blog.fufu520.cn>
+- 项目地址:<https://github.com/likeMiku520/halo-plugin-cover-generator>
+- 环境要求:Halo `>=2.26.0`
+
+---
+
+## 许可证
+
+本项目采用 **GNU General Public License v3.0(GPL-3.0)**。
+
+任何人都可以自由使用、修改与再分发本软件,包括商业用途;再分发时须保留版权声明并以同一许可开源。完整条款见 [LICENSE.gpl-3.0](./LICENSE.gpl-3.0)。
+
+### 来源与版权
+
+本项目是 [baoxinwen/halo-plugin-cover-generator](https://github.com/baoxinwen/halo-plugin-cover-generator)(作者 [xsfly](https://github.com/xsfly)、[baoxinwen](https://github.com/baoxinwen),GPL-3.0)的衍生作品,按 GPL-3.0 第 5 条以同一许可继续分发。
+
+- 原始作品版权归其原作者所有
+- 本衍生作品自 1.0.0 起由 fufu大王维护,新增与修改部分的版权归 fufu大王所有
+
+依据 GPL-3.0,本项目的完整源代码随发行版一并提供。
+
+### 第三方资源
+
+- 内置字体「抖音美好体」(Bold):由字节跳动官方声明免费商用(含商业场景),按其授权条款随包再分发;具体授权范围以官方发布页最新说明为准。字体文件经插件 JAR 静态资源分发,运行时由 `/plugins/cover-generator/assets/fonts/**` 按需加载。
+- 图标库 [Iconify](https://iconify.design/):图标经其公开 API 按需获取,遵循各图标集自身的许可。

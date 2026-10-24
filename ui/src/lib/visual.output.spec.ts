@@ -91,6 +91,17 @@ describe.skipIf(!existsSync(FONT_PATH))('视觉快照产物', () => {
         titleLeft: '竖版', titleRight: '3:4',
         subtitle: '适配长画布', watermark: 'example.com',
       }),
+      // 9) 中缝间距拉大：两段明显分开
+      '09-seam-wide': makeCoverState({
+        titleLeft: '工具', titleRight: '推荐', seamGap: 260,
+        subtitle: '中缝 260px', watermark: 'example.com',
+      }),
+      // 10) 图层顺序：标题压到最底层，水印提到最上层
+      '10-layers': makeCoverState({
+        titleLeft: '标题在下', titleRight: '水印在上',
+        subtitle: '图层顺序', watermark: 'example.com',
+        layers: ['title', 'logo', 'subtitle', 'watermark'],
+      }),
     }
 
     for (const [name, state] of Object.entries(cases)) {

@@ -10,7 +10,7 @@ export interface FontLike {
   getAdvanceWidth(text: string, size: number): number
   getPath(text: string, x: number, y: number, size: number): { commands: PathCommandLike[] }
 }
-import type { Anchor, CanvasSize, CoverState, CustomElement } from './types'
+import type { Anchor, CanvasSize, CoverState, CustomElement, LayerKey } from './types'
 import { gradientToSvgAttrs } from './gradient'
 import { fitFontSize, type MeasureText } from './fitFontSize'
 import { pathToD } from './fontLoader'
@@ -111,20 +111,48 @@ export function buildCoverSvg(o: {
     `<rect width="${ctx.W}" height="${ctx.H}" fill="url(#bg)"/>`,
     `<rect width="${ctx.W}" height="${ctx.H}" fill="url(#hl)"/>`,
     `<rect width="${ctx.W}" height="${ctx.H}" fill="url(#vig)"/>`,
-    titleLayer(state, font, measure, !!logoUrl, ctx),
-    subTitleLayer(state, font, measure, ctx),
-    // 投影必须作用于裁圆后的图形（外层 g filter + 内层 clip）：
-    // SVG 规范中同元素 filter 先于 clip-path，直接挂 image 上会产生方形阴影边界
-    logoUrl ? logoLayer(logoUrl, state.layout.logo, ctx) : '',
-    watermarkLayer(state, font, measure, ctx),
-    customElementLayers(state.customElements, font, measure, ctx),
-    // 噪点最上层：统一质感并消除大面积渐变的色带
+    // 图元按图层顺序绘制：数组靠后者在上层，内置元素与自定义元素共用同一次序
+    ...renderLayers(state, font, measure, ctx, logoUrl),
+    // 噪点始终最上层：统一质感并消除大面积渐变的色带
     `<rect width="${ctx.W}" height="${ctx.H}" fill="url(#grain)" opacity="0.06"/>`,
   ]
 
   return `<svg width="${ctx.W}" height="${ctx.H}" viewBox="0 0 ${ctx.W} ${ctx.H}" ` +
     `fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">\n` +
     `<defs>${defs.join('')}</defs>\n${body.filter(Boolean).join('\n')}\n</svg>`
+}
+
+/** 按 layers 顺序产出图元；顺序表中缺失的元素补画在末尾，避免旧档升级后元素消失 */
+function renderLayers(
+  state: CoverState, font: FontLike | null, measure: MeasureText, ctx: Ctx, logoUrl: string | null,
+): string[] {
+  const render = (key: LayerKey): string => {
+    switch (key) {
+      case 'title':
+        return titleLayer(state, font, measure, !!logoUrl, ctx)
+      case 'subtitle':
+        return subTitleLayer(state, font, measure, ctx)
+      case 'watermark':
+        return watermarkLayer(state, font, measure, ctx)
+      case 'logo':
+        // 投影必须作用于裁圆后的图形（外层 g filter + 内层 clip）：
+        // SVG 规范中同元素 filter 先于 clip-path，直接挂 image 上会产生方形阴影边界
+        return logoUrl ? logoLayer(logoUrl, state.layout.logo, ctx) : ''
+      default: {
+        const id = key.slice('custom:'.length)
+        const el = state.customElements.find((e) => e.id === id)
+        return el ? customElementLayer(el, font, measure, ctx) : ''
+      }
+    }
+  }
+  const known = new Set<string>([
+    'title', 'subtitle', 'watermark', 'logo',
+    ...state.customElements.map((e) => `custom:${e.id}`),
+  ])
+  const declared = state.layers.filter((k) => known.has(k))
+  const declaredSet = new Set<string>(declared)
+  const missing = [...known].filter((k) => !declaredSet.has(k)) as LayerKey[]
+  return [...declared, ...missing].map(render)
 }
 
 /** Logo 的裁圆与投影定义：圆心随锚点移动，故 id 固定但几何值动态生成 */
@@ -297,6 +325,7 @@ function titleLayer(
 ): string {
   const left = state.titleLeft.trim()
   const right = state.titleRight.trim()
+  const flow = state.titleFlow.trim()
   const ax = normalizeAnchor(state.layout.title)
   const { x: cx, y: baseline } = px(ax, ctx)
   // 基准字号由用户滑杆控制（100–210），自适应只在放不下时保护性缩小
@@ -307,8 +336,10 @@ function titleLayer(
   const minSize = CANVAS.TITLE_MIN * ctx.s.h
   const wrap = (inner: string) => (inner ? `<g filter="url(#shadow)">${inner}</g>` : '')
   const maxW = fullMaxWidth(ctx) * ax.scale
+  // 两种排版各有独立文本：整块模式只看 titleFlow，分缝模式只看左右两段
+  const hasText = state.titleMode === 'flow' ? !!flow : !!(left || right)
 
-  if (!left && !right) {
+  if (!hasText) {
     // 占位(仅预览态可见;导出按钮在 UI 层因空标题禁用)。降透明度以免
     // 与真实封面混淆——首跑用户此前看到的是一张"已完成"的封面(A5)
     const ph = layoutLine(
@@ -318,7 +349,7 @@ function titleLayer(
   }
 
   if (state.titleMode === 'flow') {
-    const lines = wrapText(`${left}${right}`, maxW, base, measure)
+    const lines = wrapText(flow, maxW, base, measure)
     const lineHeight = Math.round(base * 1.18)
     // 整块以锚点为竖直中心：行数增加时向上向下对称展开
     const firstBaseline = baseline - ((lines.length - 1) * lineHeight) / 2
@@ -361,7 +392,7 @@ function titleLayer(
   const size = Math.max(minSize, Math.round(base * clamped))
   // 字号被下限截住后，剩余比例转为水平压缩，两段因此仍严格不超单侧可用宽度
   const compress = clamped > 0 ? clamped / (size / base) : 1
-  const half = byWidth(CANVAS.SEAM_GAP, ctx.s) / 2
+  const half = byWidth(state.seamGap, ctx.s) / 2
   const leftText = left
     ? layoutLine(font, left, cx - half, baseline, size, 0, '#ffffff', 'end', true, segMax, compress)
     : ''
@@ -394,14 +425,16 @@ export function titleGeometry(
 ): TitleGeometry | null {
   const left = state.titleLeft.trim()
   const right = state.titleRight.trim()
-  if (!left && !right) return null
+  const flow = state.titleFlow.trim()
+  const hasText = state.titleMode === 'flow' ? !!flow : !!(left || right)
+  if (!hasText) return null
   const ax = normalizeAnchor(state.layout.title)
   const base = Math.min(CANVAS.TITLE_BASE, Math.max(CANVAS.TITLE_MIN, state.titleFontSize)) * ctx.s.h
   const minSize = CANVAS.TITLE_MIN * ctx.s.h
   const maxW = fullMaxWidth(ctx) * ax.scale
 
   if (state.titleMode === 'flow') {
-    const lines = wrapText(`${left}${right}`, maxW, base, measure)
+    const lines = wrapText(flow, maxW, base, measure)
     return {
       fontSize: base,
       seamHalf: 0,
@@ -440,7 +473,7 @@ export function titleGeometry(
   const fontSize = Math.max(minSize, Math.round(base * clamped))
   // 与 titleLayer 同源：字号被下限截住后，剩余比例转为水平压缩
   const compress = clamped > 0 ? clamped / (fontSize / base) : 1
-  const segHalf = byWidth(CANVAS.SEAM_GAP, ctx.s) / 2
+  const segHalf = byWidth(state.seamGap, ctx.s) / 2
   const leftWidth = left ? measure(left, fontSize) * compress : 0
   const rightWidth = right ? measure(right, fontSize) * compress : 0
   return {
@@ -515,16 +548,6 @@ function watermarkLayer(
     ? pathTextTracked(font, wm, x, y, size, trackPx, fits, maxW, ALIGN.watermark)
     : fallbackTextTracked(wm, x, y, size, trackPx, fits, maxW, ALIGN.watermark)
   return `<g opacity="0.65">${text}</g>`
-}
-
-/** 自定义元素层：按数组顺序叠加，image/svg/text 三种形态 */
-function customElementLayers(
-  elements: CustomElement[], font: FontLike | null, measure: MeasureText, ctx: Ctx,
-): string {
-  return elements
-    .map((el) => customElementLayer(el, font, measure, ctx))
-    .filter(Boolean)
-    .join('')
 }
 
 /** 元素实际尺寸：文字按字号、图形按边长，命中框与渲染共用此换算 */

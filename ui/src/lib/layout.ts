@@ -1,4 +1,4 @@
-import type { Anchor, AnchorMap, CanvasSize, CoverState, TitleMode } from './types'
+import type { Anchor, AnchorMap, CanvasSize, CoverState, LayerKey, TitleMode } from './types'
 
 /**
  * 画布基准与版式常量。
@@ -22,8 +22,10 @@ export const CANVAS = {
   WM_SIZE: 26,
   /** 图形类尺寸按宽度缩放 */
   LOGO_SIZE: 200,
-  /** 分缝中缝留白(按宽度) */
+  /** 分缝中缝默认留白(按宽度) */
   SEAM_GAP: 80,
+  SEAM_GAP_MIN: 0,
+  SEAM_GAP_MAX: 400,
   SEG_MAX_FRACTION: 0.4333,
   /** 整块标题可用宽度占画布宽的比例 */
   FULL_MAX_FRACTION: 0.9333,
@@ -117,11 +119,24 @@ export const TITLE_MODE_LABEL: Record<TitleMode, string> = {
   flow: '整块排版',
 }
 
+/** 默认图层顺序：等价于改造前的绘制次序（副标题→Logo→标题→水印，自定义元素在最上层） */
+export function defaultLayers(customIds: string[] = []): LayerKey[] {
+  return ['subtitle', 'logo', 'title', 'watermark', ...customIds.map((id) => `custom:${id}` as LayerKey)]
+}
+
+/** 中缝间距收敛进安全域 */
+export function normalizeSeamGap(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return CANVAS.SEAM_GAP
+  return Math.min(CANVAS.SEAM_GAP_MAX, Math.max(CANVAS.SEAM_GAP_MIN, Math.round(value)))
+}
+
 /** 新建存档的完整默认状态 */
 export function defaultCoverState(): CoverState {
   return {
     titleLeft: '',
     titleRight: '',
+    titleFlow: '',
+    seamGap: CANVAS.SEAM_GAP,
     titleFontSize: CANVAS.TITLE_BASE,
     titleMode: 'split',
     subtitle: '',
@@ -133,6 +148,7 @@ export function defaultCoverState(): CoverState {
     canvas: { width: REF_W, height: REF_H },
     layout: defaultAnchors(),
     customElements: [],
+    layers: defaultLayers(),
   }
 }
 

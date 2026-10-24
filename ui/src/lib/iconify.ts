@@ -1,14 +1,23 @@
 /**
- * Iconify 公共 API 客户端。
+ * Iconify 图标库客户端。
  *
- * Halo Console 内置的图标选择器基于 Iconify,但那个选择器只作为宿主表单类型
- * (`$formkit: iconify`)对外提供,并未导出为可复用组件,插件无法直接挂载它。
- * 因此这里直连 Iconify 官方 API 检索同一套图标库,并把选中的图标转成
- * 自包含的 SVG 标记入库(与手工粘贴 SVG 走同一条白名单过滤)。
+ * Halo Console 自带的图标选择器基于 Iconify,但它只作为宿主表单类型
+ * (`$formkit: iconify`)存在、未导出为可复用组件,插件无法直接挂载,
+ * 因此这里直连 Iconify 官方 API 浏览同一套图标库(200+ 图标集),
+ * 并把选中的图标取回为自包含的 SVG 标记(与手工粘贴走同一条白名单过滤)。
  */
 
-const SEARCH_URL = 'https://api.iconify.design/search'
-const SVG_URL = 'https://api.iconify.design'
+const API = 'https://api.iconify.design'
+const TIMEOUT_MS = 10000
+
+/** 单个图标集 */
+export interface IconSet {
+  prefix: string
+  name: string
+  total: number
+  author: string
+  license: string
+}
 
 /** 检索结果中的一条候选 */
 export interface IconifyHit {
@@ -17,21 +26,17 @@ export interface IconifyHit {
   prefix: string
 }
 
-/** 检索失败原因中文化;网络不可用与无结果要分开说,否则用户无从下手 */
+/** 失败原因中文化;网络不可用与无结果分开说,否则用户无从下手 */
 export class IconifyError extends Error {}
-
-const TIMEOUT_MS = 8000
 
 async function requestJson(url: string): Promise<unknown> {
   let res: Response
   try {
     res = await fetch(url, { mode: 'cors', signal: AbortSignal.timeout(TIMEOUT_MS) })
   } catch {
-    throw new IconifyError('无法连接 Iconify 图标库(网络受限或浏览器拦截),可改用粘贴 SVG 或直链导入')
+    throw new IconifyError('无法连接 Iconify 图标库(网络受限),可改用粘贴 SVG 或直链导入')
   }
-  if (!res.ok) {
-    throw new IconifyError(`Iconify 图标库返回 HTTP ${res.status},请稍后重试`)
-  }
+  if (!res.ok) throw new IconifyError(`Iconify 图标库返回 HTTP ${res.status},请稍后重试`)
   try {
     return await res.json()
   } catch {
@@ -39,14 +44,56 @@ async function requestJson(url: string): Promise<unknown> {
   }
 }
 
+interface RawCollection {
+  name?: string
+  total?: number
+  author?: { name?: string }
+  license?: { title?: string }
+}
+
 /**
- * 按关键词检索图标。
- * limit 上限 999(API 约定),调用方给的是展示上限,这里固定取 64 足够翻看。
+ * 拉取全部图标集并排序:先按图标数量降序,数量相同时按名称。
+ * 图标多的集合通常也是用户最常找的(如 Material Design Icons / Tabler),
+ * 排前面可以减少翻找。
  */
-export async function searchIcons(keyword: string, limit = 64): Promise<IconifyHit[]> {
+export async function listIconSets(): Promise<IconSet[]> {
+  const data = (await requestJson(`${API}/collections`)) as Record<string, RawCollection>
+  return Object.entries(data)
+    .map(([prefix, meta]) => ({
+      prefix,
+      name: meta.name ?? prefix,
+      total: typeof meta.total === 'number' ? meta.total : 0,
+      author: meta.author?.name ?? '',
+      license: meta.license?.title ?? '',
+    }))
+    .filter((s) => s.total > 0)
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
+}
+
+/** 取某个图标集的全部图标名(含未分类与分类下的图标) */
+export async function listIconsOfSet(prefix: string): Promise<string[]> {
+  const data = (await requestJson(`${API}/collection?prefix=${encodeURIComponent(prefix)}`)) as {
+    uncategorized?: unknown
+    categories?: Record<string, unknown>
+    aliases?: Record<string, unknown>
+  }
+  const names: string[] = []
+  const push = (list: unknown) => {
+    if (Array.isArray(list)) {
+      for (const n of list) if (typeof n === 'string') names.push(n)
+    }
+  }
+  push(data.uncategorized)
+  for (const group of Object.values(data.categories ?? {})) push(group)
+  push(Object.keys(data.aliases ?? {}))
+  return [...new Set(names)].map((n) => `${prefix}:${n}`)
+}
+
+/** 按关键词检索图标;limit 上限 999(API 约定) */
+export async function searchIcons(keyword: string, limit = 120): Promise<IconifyHit[]> {
   const q = keyword.trim()
   if (!q) return []
-  const url = `${SEARCH_URL}?query=${encodeURIComponent(q)}&limit=${Math.min(999, limit)}`
+  const url = `${API}/search?query=${encodeURIComponent(q)}&limit=${Math.min(999, limit)}`
   const data = (await requestJson(url)) as { icons?: unknown }
   const icons = Array.isArray(data.icons) ? data.icons : []
   return icons
@@ -54,11 +101,11 @@ export async function searchIcons(keyword: string, limit = 64): Promise<IconifyH
     .map((name) => ({ name, prefix: name.split(':')[0] }))
 }
 
-/** 取单个图标的 SVG 标记(带颜色填充,便于直接内联进封面) */
+/** 取单个图标的 SVG 标记(带填充色,便于直接内联进封面) */
 export async function fetchIconSvg(name: string, color = '#ffffff'): Promise<string> {
   const [prefix, icon] = name.split(':')
   if (!prefix || !icon) throw new IconifyError('图标名格式应为「图标集:图标」,例如 mdi:home')
-  const url = `${SVG_URL}/${encodeURIComponent(prefix)}/${encodeURIComponent(icon)}.svg` +
+  const url = `${API}/${encodeURIComponent(prefix)}/${encodeURIComponent(icon)}.svg` +
     `?color=${encodeURIComponent(color)}`
   let res: Response
   try {
@@ -70,4 +117,9 @@ export async function fetchIconSvg(name: string, color = '#ffffff'): Promise<str
   const text = await res.text()
   if (!/<svg[\s>]/i.test(text)) throw new IconifyError('图标内容不是有效的 SVG')
   return text
+}
+
+/** 预览缩略图地址:Iconify 的 CSS API,<i> 元素即可渲染,无需 JS 运行时 */
+export function iconPreviewUrl(name: string, height = 24): string {
+  return `${API}/${name.replace(':', '/')}.svg?height=${height}`
 }

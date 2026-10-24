@@ -1,11 +1,11 @@
 import { ref, watch, onScopeDispose } from 'vue'
 import type { Ref } from 'vue'
-import type { Anchor, AnchorMap, CoverState, CustomElement, CustomKind, TitleMode } from '../lib/types'
+import type { Anchor, AnchorMap, CoverState, CustomElement, CustomKind, LayerKey, TitleMode } from '../lib/types'
 import { PRESETS } from '../lib/presets'
 import { splitTitle } from '../lib/splitTitle'
 import {
-  CANVAS, REF_H, REF_W, defaultAnchors, defaultCoverState,
-  isValidCanvasSize, normalizeAnchor, normalizeCanvasSize,
+  CANVAS, REF_H, REF_W, defaultAnchors, defaultCoverState, defaultLayers,
+  isValidCanvasSize, normalizeAnchor, normalizeCanvasSize, normalizeSeamGap,
 } from '../lib/layout'
 
 /** 工作台状态存档键;CoverWorkbench 需同名键判断「是否存在存档」(archive-wins 播种门槛) */
@@ -141,6 +141,7 @@ function repairNewFields(
   }
   merged.layout = layout
   const rawElements = raw.customElements
+  let customIds: string[] = []
   if (!Array.isArray(rawElements)) {
     merged.customElements = []
     repaired = true
@@ -148,9 +149,41 @@ function repairNewFields(
     const kept = rawElements.filter(isValidCustomElement).slice(0, MAX_CUSTOM_ELEMENTS)
     if (kept.length !== rawElements.length) repaired = true
     merged.customElements = kept.map((e) => ({ ...e, anchor: normalizeAnchor(e.anchor) }))
+    customIds = kept.map((e) => e.id)
   }
+  // 两种排版的文本各自独立：旧档没有 titleFlow 字段，迁移时用当前左右两段填充一次，
+  // 这样从分缝切到整块不会看到空标题（此后两者互不覆盖）
+  if (typeof raw.titleFlow !== 'string') {
+    merged.titleFlow = `${merged.titleLeft}${merged.titleRight}`
+    repaired = true
+  }
+  if (typeof raw.seamGap !== 'number' || !Number.isFinite(raw.seamGap)) {
+    merged.seamGap = CANVAS.SEAM_GAP
+    repaired = true
+  } else {
+    merged.seamGap = normalizeSeamGap(raw.seamGap)
+  }
+  // 图层顺序先收敛为已知键并去重，再补上缺失项（新增元素、旧档无该字段）。
+// 不去重会让同一元素被绘制两次（存档可被手工编辑，属于不可信输入）
+  const known = new Set<string>(['title', 'subtitle', 'watermark', 'logo',
+    ...customIds.map((id) => `custom:${id}`)])
+  const declared: LayerKey[] = []
+  if (Array.isArray(raw.layers)) {
+    for (const k of raw.layers as unknown[]) {
+      if (typeof k !== 'string' || !known.has(k)) continue
+      if (declared.includes(k as LayerKey)) continue
+      declared.push(k as LayerKey)
+    }
+  }
+  const missing = [...known].filter((k) => !declared.includes(k as LayerKey)) as LayerKey[]
+  if (declared.length !== known.size) repaired = true
+  const ordered = [...declared, ...missing]
+  // 自定义元素缺失时按默认次序补齐在前，避免升级后新元素默认压住标题
+  merged.layers = ordered.length
+    ? ordered
+    : defaultLayers(customIds)
   if (raw.titleMode === undefined || raw.layout === undefined || raw.customElements === undefined
-    || raw.canvas === undefined) {
+    || raw.canvas === undefined || raw.layers === undefined) {
     repaired = true
   }
   return repaired

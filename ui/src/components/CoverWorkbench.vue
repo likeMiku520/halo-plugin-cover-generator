@@ -95,8 +95,12 @@ function mergeRouteQuery(query: Record<string, unknown> | undefined) {
   const postName = typeof query.postName === 'string' ? query.postName : ''
   const postTitle = typeof query.postTitle === 'string' ? query.postTitle : ''
   if (!titleLeft && !titleRight && !presetId && !postName) return
-  if (titleLeft) state.value.titleLeft = titleLeft
-  if (titleRight) state.value.titleRight = titleRight
+  // 路由回传的两段文本属于分缝模式，切回该模式再写入，避免与整块模式互相污染
+  if (titleLeft || titleRight) {
+    if (titleLeft) state.value.titleLeft = titleLeft
+    if (titleRight) state.value.titleRight = titleRight
+    state.value.titleMode = 'split'
+  }
   const preset = PRESETS.find((p) => p.id === presetId)
   if (preset) {
     state.value.gradient = { angle: preset.angle, stops: [...preset.stops] }
@@ -183,9 +187,13 @@ onBeforeUnmount(() => {
   if (previewTimer) clearTimeout(previewTimer)
 })
 
-const canExport = computed(
-  () => !!font.value && !!(state.value.titleLeft.trim() || state.value.titleRight.trim()),
-)
+/** 当前生效的标题文本：两种排版各自取值，导出判断与文件名都以它为准 */
+const titleText = computed(() =>
+  state.value.titleMode === 'flow'
+    ? state.value.titleFlow
+    : state.value.titleLeft + state.value.titleRight)
+
+const canExport = computed(() => !!font.value && !!titleText.value.trim())
 const exportError = ref('')
 
 /** 下载成功反馈('svg'/'png'):按钮短暂变「✓ 已下载」,2.5s 后复原 */
@@ -198,7 +206,7 @@ function flashDownload(kind: 'svg' | 'png') {
 }
 
 function exportSvg() {
-  downloadSvg(svg.value, svgFileName(state.value.titleLeft + state.value.titleRight, 'svg'))
+  downloadSvg(svg.value, svgFileName(titleText.value, 'svg'))
   flashDownload('svg')
 }
 
@@ -210,7 +218,7 @@ async function exportPng(scale = 1) {
   try {
     await downloadPng(
       svg.value, state.value.canvas,
-      svgFileName(state.value.titleLeft + state.value.titleRight, 'png'), scale,
+      svgFileName(titleText.value, 'png'), scale,
     )
     exportError.value = ''
     flashDownload('png')
@@ -272,7 +280,7 @@ async function uploadCurrentCover(): Promise<string> {
   const blob = await svgToPngBlob(svg.value, state.value.canvas)
   const { permalink } = await uploadCoverPng(
     blob,
-    coverAttachmentFileName(state.value.titleLeft + state.value.titleRight),
+    coverAttachmentFileName(titleText.value),
     settings,
   )
   return permalink

@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { AnchorKey, CoverState, CustomElement, CustomKind } from '../lib/types'
+import type { AnchorKey, CoverState, CustomElement, CustomKind, LayerKey } from '../lib/types'
 import { defaultAnchors, normalizeAnchor } from '../lib/layout'
 import { anchorLabel, type SelectionId } from '../composables/useCanvasInteraction'
 import { fetchLogoAsDataUrl, validateLogoUrl } from '../lib/logoFetcher'
 import { sanitizeSvgMarkup } from '../lib/svgSanitizer'
 import { MAX_CUSTOM_ELEMENTS } from '../composables/useCoverState'
 import IconifyPicker from './IconifyPicker.vue'
+import SliderField from './SliderField.vue'
 
 /**
- * 元素面板：统一的元素列表（内置 + 自定义）+ 选中元素的位置/大小 + 自定义元素录入。
+ * 元素面板。
  *
- * 元素只能在这里选中（画布不可点选，见 CanvasOverlay），
- * 因此列表必须完整承载「有哪些元素、现在选中谁、如何新增与删除」。
+ * 承担四件事:选中哪个元素、选中元素的位置与大小、各元素的前后层级、
+ * 追加自定义元素。元素只能在这里选中(画布是纯预览),因此列表要完整承载
+ * 「有哪些元素、现在选中谁、谁盖住谁」。
  */
 const props = defineProps<{
   modelValue: CoverState
@@ -62,41 +64,72 @@ function anchorOfId(id: SelectionId) {
 
 const activeAnchor = computed(() => (props.selected ? anchorOfId(props.selected) : null))
 
-/** 选中元素是否属于自定义元素（决定位置区是否同时给出删除入口） */
 const activeElement = computed(() => {
   if (!props.selected?.startsWith('custom:')) return null
   const id = props.selected.slice('custom:'.length)
   return props.modelValue.customElements.find((el) => el.id === id) ?? null
 })
 
-function onPercent(axis: 'x' | 'y' | 'scale', ev: Event) {
-  if (!props.selected) return
-  const raw = Number((ev.target as HTMLInputElement).value)
-  if (!Number.isFinite(raw)) return
-  setAnchor(props.selected, { [axis]: raw / 100 })
-}
+/** 当前选中元素在图层表中的位置（-1 表示不在表中） */
+const activeLayerIndex = computed(() =>
+  props.selected ? props.modelValue.layers.indexOf(props.selected as LayerKey) : -1)
 
-function onScaleInput(ev: Event) {
-  const raw = Number((ev.target as HTMLInputElement).value)
-  if (!props.selected || !Number.isFinite(raw)) return
-  setAnchor(props.selected, { scale: raw / 100 })
-}
+/**
+ * 标题的「大小」直接驱动标题字号，而不是再叠一层倍率。
+ *
+ * 标题字号是用户能在多个位置看到的同一个量（内容区滑杆 / 元素区大小），
+ * 若各自独立，用户在其中一处拖动时另一处不动，看起来就像「拖了没反应」。
+ * 因此标题的等效值 = 字号 × 锚点倍率，拖动时把倍率归 1、差值写进字号。
+ */
+const isTitle = computed(() => props.selected === 'title')
+const titleAnchorScale = computed(() => props.modelValue.layout.title.scale)
+const titleEffectiveFontSize = computed(() =>
+  Math.round(props.modelValue.titleFontSize * titleAnchorScale.value))
+const titleSizePercent = computed(() =>
+  Math.round((titleEffectiveFontSize.value / MAX_TITLE_FONT_SIZE) * 100))
 
-/** 重置位置与大小：自定义元素的位置一并归位，但保留其内容 */
-function resetLayout() {
-  const center = (el: CustomElement): CustomElement => ({
-    ...el,
-    anchor: { x: 0.5, y: 0.5, scale: 1 },
+/** 字号安全域：与 layout 的 TITLE_MIN/TITLE_BASE 一致 */
+const MIN_TITLE_FONT_SIZE = 64
+const MAX_TITLE_FONT_SIZE = 210
+
+/** 标题大小(%) → 字号 + 倍率归位 */
+function onTitleSizePercent(percent: number) {
+  const size = Math.min(MAX_TITLE_FONT_SIZE, Math.max(MIN_TITLE_FONT_SIZE, Math.round((percent / 100) * MAX_TITLE_FONT_SIZE)))
+  set({
+    titleFontSize: size,
+    layout: { ...props.modelValue.layout, title: { ...props.modelValue.layout.title, scale: 1 } },
   })
+}
+
+const canMoveUp = computed(() =>
+  activeLayerIndex.value >= 0 && activeLayerIndex.value < props.modelValue.layers.length - 1)
+const canMoveDown = computed(() => activeLayerIndex.value > 0)
+
+/** 上移/下移一层：交换图层顺序，只影响遮挡关系 */
+function moveLayer(delta: number) {
+  const i = activeLayerIndex.value
+  const j = i + delta
+  const list = [...props.modelValue.layers]
+  if (i < 0 || j < 0 || j >= list.length) return
+  const [item] = list.splice(i, 1)
+  list.splice(j, 0, item)
+  set({ layers: list })
+}
+
+/** 重置位置与大小：自定义元素的位置一并归位，但保留其内容与层级 */
+function resetLayout() {
   set({
     layout: defaultAnchors(),
-    customElements: props.modelValue.customElements.map(center),
+    customElements: props.modelValue.customElements.map((el) => ({
+      ...el,
+      anchor: { x: 0.5, y: 0.5, scale: 1 },
+    })),
   })
 }
 
 /* ---------------- 自定义元素录入 ---------------- */
 
-const addKind = ref<CustomKind>('image')
+const addKind = ref<CustomKind>('text')
 const elementError = ref('')
 const busy = ref(false)
 const svgInput = ref('')
@@ -116,7 +149,7 @@ function newElement(kind: CustomKind, patch: Partial<CustomElement> = {}): Custo
     id: nextId(),
     kind,
     content: '',
-    text: kind === 'text' ? '双击编辑文字' : '',
+    text: kind === 'text' ? '点击下方可编辑文字' : '',
     size: kind === 'text' ? 48 : 160,
     anchor: { x: 0.5, y: 0.5, scale: 1 },
     color: '#ffffff',
@@ -127,8 +160,12 @@ function newElement(kind: CustomKind, patch: Partial<CustomElement> = {}): Custo
   }
 }
 
+/** 入列即置于最上层，同时把图层键追加到顺序表末尾 */
 function appendElement(el: CustomElement) {
-  set({ customElements: [...props.modelValue.customElements, el] })
+  set({
+    customElements: [...props.modelValue.customElements, el],
+    layers: [...props.modelValue.layers, `custom:${el.id}`],
+  })
   emit('select', `custom:${el.id}`)
   elementError.value = ''
 }
@@ -138,26 +175,15 @@ function updateElement(id: string, patch: Partial<CustomElement>) {
 }
 
 function removeElement(id: string) {
-  set({ customElements: props.modelValue.customElements.filter((el) => el.id !== id) })
-  if (props.selected === `custom:${id}`) emit('select', null)
-}
-
-function moveElement(id: string, delta: number) {
-  const list = [...props.modelValue.customElements]
-  const i = list.findIndex((el) => el.id === id)
-  const j = i + delta
-  if (i < 0 || j < 0 || j >= list.length) return
-  const [item] = list.splice(i, 1)
-  list.splice(j, 0, item)
-  set({ customElements: list })
+  const key = `custom:${id}` as LayerKey
+  set({
+    customElements: props.modelValue.customElements.filter((el) => el.id !== id),
+    layers: props.modelValue.layers.filter((k) => k !== key),
+  })
+  if (props.selected === key) emit('select', null)
 }
 
 const canAdd = computed(() => props.modelValue.customElements.length < MAX_CUSTOM_ELEMENTS)
-
-function addText() {
-  if (!canAdd.value) return
-  appendElement(newElement('text'))
-}
 
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -166,6 +192,11 @@ function readAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(new Error('文件读取失败，请重试'))
     reader.readAsDataURL(file)
   })
+}
+
+function addText() {
+  if (!canAdd.value) return
+  appendElement(newElement('text'))
 }
 
 function onPickImageFile(ev: Event) {
@@ -259,7 +290,7 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
       <span class="spacer"></span>
       <button type="button" class="sd-btn-quiet" @click="resetLayout">重置位置</button>
     </div>
-    <p class="hint">点下面的元素名选中它，再拖动或用方向键微调（Shift 加速）</p>
+    <p class="hint">点元素名选中，方向键微调（Shift 加速）</p>
 
     <ul class="el-list">
       <li v-for="key in BUILTIN" :key="key">
@@ -272,7 +303,9 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
         >
           <span class="el-kind">{{ anchorLabel(key) }}</span>
           <span class="el-meta">
-            {{ Math.round(modelValue.layout[key].x * 100) }}% · {{ Math.round(modelValue.layout[key].y * 100) }}%
+            {{ Math.round(modelValue.layout[key].x * 100) }}% ·
+            {{ Math.round(modelValue.layout[key].y * 100) }}% ·
+            {{ Math.round(modelValue.layout[key].scale * 100) }}%
           </span>
         </button>
       </li>
@@ -285,188 +318,176 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
             @click="emit('select', selected === `custom:${el.id}` ? null : `custom:${el.id}`)"
           >
             <span class="el-kind">{{ KIND_LABEL[el.kind] }}</span>
-            <span class="el-meta">
-              {{ el.kind === 'text' ? el.text.slice(0, 10) : `${el.size}px` }}
-            </span>
+            <span class="el-meta">{{ el.kind === 'text' ? el.text.slice(0, 8) : `${el.size}px` }}</span>
           </button>
-          <button type="button" class="mini" aria-label="上移" @click="moveElement(el.id, -1)">↑</button>
-          <button type="button" class="mini" aria-label="下移" @click="moveElement(el.id, 1)">↓</button>
-          <button type="button" class="mini danger" aria-label="删除" @click="removeElement(el.id)">✕</button>
+          <button type="button" class="mini danger" aria-label="删除元素" @click="removeElement(el.id)">✕</button>
         </div>
       </li>
     </ul>
 
-    <div v-if="activeAnchor" class="pos">
-      <div class="row3">
-        <label class="field">
-          <span class="lb">水平 %</span>
-          <input
-            class="sd-field"
-            type="number"
-            min="2"
-            max="98"
-            :value="Math.round(activeAnchor.x * 100)"
-            @change="onPercent('x', $event)"
-          />
-        </label>
-        <label class="field">
-          <span class="lb">垂直 %</span>
-          <input
-            class="sd-field"
-            type="number"
-            min="3"
-            max="97"
-            :value="Math.round(activeAnchor.y * 100)"
-            @change="onPercent('y', $event)"
-          />
-        </label>
-        <label class="field">
-          <span class="lb">大小 %</span>
-          <input
-            class="sd-field"
-            type="number"
-            min="10"
-            max="500"
-            :value="Math.round(activeAnchor.scale * 100)"
-            @change="onPercent('scale', $event)"
-          />
-        </label>
-      </div>
-      <input
-        class="slider"
-        type="range"
-        min="20"
-        max="300"
-        step="5"
-        :style="{ '--fill': `${((activeAnchor.scale * 100 - 20) / 280) * 100}%` }"
-        :value="Math.round(activeAnchor.scale * 100)"
-        aria-label="选中元素大小"
-        @input="onScaleInput($event)"
-      />
-    </div>
-    <p v-else-if="modelValue.customElements.length" class="hint">选中上面的任一元素可调整位置与大小</p>
+    <template v-if="activeAnchor && selected">
+      <div class="detail">
+        <div class="detail-head">
+          <b>{{ selected.startsWith('custom:') ? (activeElement ? KIND_LABEL[activeElement.kind] : '元素') : anchorLabel(selected as AnchorKey) }}</b>
+          <span class="spacer"></span>
+          <button
+            type="button"
+            class="sd-btn-quiet mini-btn"
+            :disabled="!canMoveDown"
+            :aria-label="'下移一层'"
+            @click="moveLayer(-1)"
+          >
+            下移一层
+          </button>
+          <button
+            type="button"
+            class="sd-btn-quiet mini-btn"
+            :disabled="!canMoveUp"
+            :aria-label="'上移一层'"
+            @click="moveLayer(1)"
+          >
+            上移一层
+          </button>
+        </div>
 
-    <div v-if="activeElement" class="detail">
-      <label v-if="activeElement.kind === 'text'" class="field">
-        <span class="lb">文字内容</span>
-        <input
-          class="sd-field"
-          :value="activeElement.text"
-          @input="updateElement(activeElement.id, { text: ($event.target as HTMLInputElement).value })"
-        />
-      </label>
-      <div class="row3">
-        <label class="field">
-          <span class="lb">{{ activeElement.kind === 'text' ? '字号' : '边长' }}</span>
-          <input
-            class="sd-field"
-            type="number"
-            :min="sizeRange(activeElement.kind).min"
-            :max="sizeRange(activeElement.kind).max"
-            :value="activeElement.size"
-            @change="updateElement(activeElement.id, { size: Number(($event.target as HTMLInputElement).value) })"
+        <div class="sliders">
+          <SliderField
+            :model-value="Math.round(activeAnchor.x * 100)"
+            :min="2"
+            :max="98"
+            label="水平"
+            suffix="%"
+            @update:model-value="setAnchor(selected, { x: $event / 100 })"
           />
-        </label>
-        <label v-if="activeElement.kind === 'text'" class="field">
-          <span class="lb">颜色</span>
-          <input
-            class="sd-field color"
-            type="color"
-            :value="activeElement.color"
-            @input="updateElement(activeElement.id, { color: ($event.target as HTMLInputElement).value })"
+          <SliderField
+            :model-value="Math.round(activeAnchor.y * 100)"
+            :min="3"
+            :max="97"
+            label="垂直"
+            suffix="%"
+            @update:model-value="setAnchor(selected, { y: $event / 100 })"
           />
-        </label>
-        <label v-if="activeElement.kind === 'text'" class="field">
-          <span class="lb">字距</span>
-          <input
-            class="sd-field"
-            type="number"
-            step="0.02"
-            min="-0.1"
-            max="1"
-            :value="activeElement.tracking"
-            @change="updateElement(activeElement.id, { tracking: Number(($event.target as HTMLInputElement).value) })"
+          <SliderField
+            v-if="isTitle"
+            :model-value="titleSizePercent"
+            :min="Math.round((MIN_TITLE_FONT_SIZE / MAX_TITLE_FONT_SIZE) * 100)"
+            :max="100"
+            label="大小"
+            suffix="%"
+            @update:model-value="onTitleSizePercent"
           />
-        </label>
+          <SliderField
+            v-else
+            :model-value="Math.round(activeAnchor.scale * 100)"
+            :min="20"
+            :max="300"
+            :step="5"
+            label="大小"
+            suffix="%"
+            @update:model-value="setAnchor(selected, { scale: $event / 100 })"
+          />
+        </div>
+
+        <template v-if="activeElement">
+          <label v-if="activeElement.kind === 'text'" class="field">
+            <span class="lb">文字内容</span>
+            <input
+              class="sd-field"
+              :value="activeElement.text"
+              @input="updateElement(activeElement.id, { text: ($event.target as HTMLInputElement).value })"
+            />
+          </label>
+          <div class="sub-row">
+            <SliderField
+              v-if="activeElement.kind !== 'text'"
+              :model-value="activeElement.size"
+              :min="sizeRange(activeElement.kind).min"
+              :max="sizeRange(activeElement.kind).max"
+              label="边长"
+              suffix="px"
+              @update:model-value="updateElement(activeElement.id, { size: $event })"
+            />
+          </div>
+          <div class="row2">
+            <label v-if="activeElement.kind === 'text'" class="field">
+              <span class="lb">颜色</span>
+              <input
+                class="sd-field color"
+                type="color"
+                :value="activeElement.color"
+                @input="updateElement(activeElement.id, { color: ($event.target as HTMLInputElement).value })"
+              />
+            </label>
+            <label class="tg">
+              <input
+                v-if="activeElement.kind === 'text'"
+                type="checkbox"
+                :checked="activeElement.bold"
+                @change="updateElement(activeElement.id, { bold: ($event.target as HTMLInputElement).checked })"
+              />
+              <input
+                v-else
+                type="checkbox"
+                :checked="activeElement.round"
+                @change="updateElement(activeElement.id, { round: ($event.target as HTMLInputElement).checked })"
+              />
+              {{ activeElement.kind === 'text' ? '加粗' : '圆形裁剪' }}
+            </label>
+          </div>
+        </template>
       </div>
-      <div class="toggles">
-        <label v-if="activeElement.kind === 'text'" class="tg">
-          <input
-            type="checkbox"
-            :checked="activeElement.bold"
-            @change="updateElement(activeElement.id, { bold: ($event.target as HTMLInputElement).checked })"
-          />
-          加粗
-        </label>
-        <label v-if="activeElement.kind !== 'text'" class="tg">
-          <input
-            type="checkbox"
-            :checked="activeElement.round"
-            @change="updateElement(activeElement.id, { round: ($event.target as HTMLInputElement).checked })"
-          />
-          圆形裁剪
-        </label>
-      </div>
-    </div>
+    </template>
+    <p v-else class="hint">
+      选中任一元素后可调整位置、大小与前后层级
+    </p>
 
     <div class="add-sec">
       <div class="lb">添加元素</div>
-      <div class="add-row">
+      <div class="seg" role="group" aria-label="选择要添加的元素类型">
         <button
+          v-for="opt in (['text', 'image', 'svg'] as CustomKind[])"
+          :key="opt"
           type="button"
-          class="sd-btn-quiet grow"
-          :class="{ 'is-pick': addKind === 'text' }"
-          :disabled="!canAdd"
-          @click="addKind = 'text'; addText()"
+          class="seg-btn"
+          :class="{ 'is-on': addKind === opt }"
+          :aria-pressed="addKind === opt"
+          @click="addKind = opt"
         >
-          文字
-        </button>
-        <button
-          type="button"
-          class="sd-btn-quiet grow"
-          :class="{ 'is-pick': addKind === 'image' }"
-          :disabled="!canAdd"
-          @click="addKind = 'image'; fileInput?.click()"
-        >
-          图片
-        </button>
-        <button
-          type="button"
-          class="sd-btn-quiet grow"
-          :class="{ 'is-pick': addKind === 'svg' }"
-          :disabled="!canAdd"
-          @click="addKind = 'svg'"
-        >
-          SVG 图标
+          {{ KIND_LABEL[opt] }}
         </button>
       </div>
 
-      <input
-        ref="fileInput"
-        class="hidden-file"
-        type="file"
-        accept="image/*"
-        @change="onPickImageFile"
-      />
+      <template v-if="addKind === 'text'">
+        <button type="button" class="sd-btn-quiet wide" :disabled="!canAdd" @click="addText">
+          添加文字元素
+        </button>
+      </template>
 
-      <div v-if="addKind === 'image'" class="url-row">
-        <input v-model="imageUrl" class="sd-field" placeholder="粘贴图片直链 https://…" aria-label="图片直链" />
-        <button type="button" class="sd-btn-quiet" :disabled="busy" @click="addImageFromUrl">导入</button>
-      </div>
-
-      <template v-if="addKind === 'svg'">
-        <IconifyPicker :color="'#ffffff'" @pick="useSvgMarkup" />
-
-        <div class="svg-more">
-          <button type="button" class="sd-btn-ghost" @click="showSvgSource = !showSvgSource">
-            {{ showSvgSource ? '收起手写 SVG' : '手写 / 上传 SVG' }}
+      <template v-else-if="addKind === 'image'">
+        <div class="add-row">
+          <button type="button" class="sd-btn-quiet grow" :disabled="!canAdd" @click="fileInput?.click()">
+            上传图片
           </button>
         </div>
+        <input ref="fileInput" class="hidden-file" type="file" accept="image/*" @change="onPickImageFile" />
+        <div class="url-row">
+          <input v-model="imageUrl" class="sd-field" placeholder="或粘贴图片直链 https://…" aria-label="图片直链" />
+          <button type="button" class="sd-btn-quiet" :disabled="busy || !canAdd" @click="addImageFromUrl">导入</button>
+        </div>
+      </template>
+
+      <template v-else>
+        <IconifyPicker color="#ffffff" @pick="useSvgMarkup" />
+        <button type="button" class="sd-btn-ghost source-toggle" @click="showSvgSource = !showSvgSource">
+          {{ showSvgSource ? '收起手写 SVG' : '手写 / 上传 SVG' }}
+        </button>
         <template v-if="showSvgSource">
-          <label class="upload-row">
-            <span class="sd-btn-quiet">选择 .svg 文件</span>
-            <input class="hidden-file" type="file" accept=".svg,image/svg+xml" @change="onPickSvgFile" />
-          </label>
+          <div class="url-row">
+            <label class="sd-btn-quiet upload">
+              选择 .svg 文件
+              <input class="hidden-file" type="file" accept=".svg,image/svg+xml" @change="onPickSvgFile" />
+            </label>
+          </div>
           <textarea
             v-model="svgInput"
             class="sd-field svg-area"
@@ -476,7 +497,7 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
           ></textarea>
           <div class="url-row">
             <input v-model="svgUrl" class="sd-field" placeholder="或 SVG 文件直链 https://…" aria-label="SVG 直链" />
-            <button type="button" class="sd-btn-quiet" :disabled="busy" @click="addSvgFromUrl">导入</button>
+            <button type="button" class="sd-btn-quiet" :disabled="busy || !canAdd" @click="addSvgFromUrl">导入</button>
           </div>
           <button
             type="button"
@@ -514,7 +535,7 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
   color: var(--sd-danger-text);
 }
 
-/* ---- 统一元素列表：内置与自定义同构 ---- */
+/* ---- 元素列表:内置与自定义同构,行高一致 ---- */
 .el-list {
   margin: 10px 0 0;
   padding: 0;
@@ -529,7 +550,8 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 12px;
+  min-height: 38px;
+  padding: 6px 10px 6px 12px;
   font-family: inherit;
   text-align: left;
   color: var(--sd-text);
@@ -554,7 +576,6 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
 }
 
 .el-row.custom {
-  padding: 4px 6px 4px 12px;
   cursor: default;
 }
 
@@ -564,7 +585,7 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
   align-items: baseline;
   gap: 8px;
   min-width: 0;
-  padding: 6px 0;
+  padding: 2px 0;
   font-family: inherit;
   text-align: left;
   color: inherit;
@@ -576,18 +597,16 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
 .el-kind {
   font-size: var(--sd-fs-md);
   font-weight: 600;
+  flex: 0 0 auto;
 }
 
 .el-meta {
+  flex: 1;
   font-size: var(--sd-fs-xs);
   color: var(--sd-text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.el-row > .el-meta {
-  flex: 1;
 }
 
 .mini {
@@ -612,22 +631,42 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
   color: var(--sd-danger-text);
 }
 
-/* ---- 选中元素的位置与大小 ---- */
-.pos {
+/* ---- 选中元素的详情 ---- */
+.detail {
   margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--sd-line);
+  padding: 10px;
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-line);
+  border-radius: var(--sd-r-control);
 }
 
-.row3 {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.detail-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: var(--sd-fs-md);
+}
+
+.mini-btn {
+  padding: 5px 10px;
+  font-size: var(--sd-fs-xs);
+}
+
+.sliders {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+}
+
+.sub-row {
+  margin-top: 8px;
 }
 
 .field {
   display: block;
   min-width: 0;
+  margin-top: 10px;
 }
 
 .lb {
@@ -637,23 +676,11 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
   color: var(--sd-text-2);
 }
 
-.slider {
-  width: 100%;
-  margin-top: 10px;
-}
-
-.detail {
-  margin-top: 12px;
-  padding: 10px;
-  background: var(--sd-surface-raised);
-  border: 1px solid var(--sd-line);
-  border-radius: var(--sd-r-control);
-}
-
-.toggles {
+.row2 {
   display: flex;
-  gap: 14px;
-  margin-top: 8px;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 10px;
 }
 
 .tg {
@@ -664,11 +691,56 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
   color: var(--sd-text-2);
 }
 
-/* ---- 添加元素 ---- */
+.sd-field.color {
+  padding: 2px;
+  height: 34px;
+}
+
+/* ---- 添加元素:类型为分段选择,动作是独立的按钮 ---- */
 .add-sec {
   margin-top: 16px;
   padding-top: 12px;
   border-top: 1px solid var(--sd-line);
+}
+
+.seg {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0;
+  padding: 3px;
+  background: var(--sd-surface-control);
+  border: 1px solid var(--sd-line);
+  border-radius: var(--sd-r-pill);
+}
+
+.seg-btn {
+  flex: 1;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: var(--sd-fs-sm);
+  color: var(--sd-text-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--sd-r-pill);
+  cursor: pointer;
+  transition:
+    color var(--sd-dur-hover) var(--sd-ease),
+    background-color var(--sd-dur-hover) var(--sd-ease);
+}
+
+.seg-btn:hover {
+  color: var(--sd-text);
+  background: var(--sd-surface-hover);
+}
+
+.seg-btn.is-on {
+  color: var(--sd-text-on-accent);
+  background: var(--sd-accent-strong);
+}
+
+.seg-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--sd-focus-ring);
 }
 
 .add-row {
@@ -678,24 +750,21 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
 
 .grow {
   flex: 1;
-  min-width: 0;
-  padding: 8px 6px;
-  font-size: var(--sd-fs-sm);
 }
 
-.grow.is-pick {
-  color: var(--sd-text-on-accent);
-  background: var(--sd-accent-strong);
-  box-shadow: none;
+.wide {
+  width: 100%;
 }
 
 .hidden-file {
   display: none;
 }
 
-.upload-row {
-  display: block;
-  margin-top: 8px;
+.upload {
+  display: inline-block;
+  width: 100%;
+  text-align: center;
+  cursor: pointer;
 }
 
 .url-row {
@@ -711,17 +780,8 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
   resize: vertical;
 }
 
-.svg-more {
-  margin-top: 10px;
-}
-
-.wide {
+.source-toggle {
   width: 100%;
-  margin-top: 8px;
-}
-
-.sd-field.color {
-  padding: 2px;
-  height: 34px;
+  margin-top: 10px;
 }
 </style>

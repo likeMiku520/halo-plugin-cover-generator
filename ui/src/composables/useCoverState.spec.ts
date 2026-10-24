@@ -381,6 +381,67 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
     expect(s.value.titleLeft).toBe('工具')
   })
 
+  it('旧档补齐两种排版的独立文本与中缝间距，且整块文本沿用当时的分缝内容', () => {
+    localStorage.setItem(KEY, legacyArchive())
+    const s = useCoverState()
+    // 迁移时用左右两段填充整块文本，切到整块模式不会看到空标题
+    expect(s.value.titleFlow).toBe('工具推荐')
+    expect(s.value.seamGap).toBe(80)
+  })
+
+  it('已存在 titleFlow 时不覆盖用户在新模式下的输入', () => {
+    localStorage.setItem(KEY, legacyArchive({ titleFlow: '整块模式下写的标题' }))
+    expect(useCoverState().value.titleFlow).toBe('整块模式下写的标题')
+  })
+
+  it('越界的中缝间距收敛进安全域，非法值回落默认', () => {
+    localStorage.setItem(KEY, legacyArchive({ seamGap: 9999 }))
+    expect(useCoverState().value.seamGap).toBe(400)
+    localStorage.setItem(KEY, legacyArchive({ seamGap: -50 }))
+    expect(useCoverState().value.seamGap).toBe(0)
+    localStorage.setItem(KEY, legacyArchive({ seamGap: 'wide' }))
+    expect(useCoverState().value.seamGap).toBe(80)
+  })
+
+  it('旧档补齐图层顺序：内置四元素齐全，自定义元素各自入列', () => {
+    localStorage.setItem(KEY, legacyArchive({
+      customElements: [{
+        id: 'z1', kind: 'text', content: '', text: 'x',
+        size: 40, anchor: { x: 0.5, y: 0.5, scale: 1 },
+        color: '#ffffff', bold: false, tracking: 0, round: false,
+      }],
+    }))
+    const s = useCoverState()
+    expect(s.value.layers).toContain('custom:z1')
+    for (const key of ['logo', 'title', 'subtitle', 'watermark']) {
+      expect(s.value.layers).toContain(key)
+    }
+  })
+
+  it('图层表剔除未知键与重复项，保留用户排定的相对顺序', () => {
+    localStorage.setItem(KEY, legacyArchive({
+      layers: ['watermark', 'nope', 'title', 'watermark', 'logo'],
+    }))
+    const s = useCoverState()
+    expect(s.value.layers.filter((k) => k === 'watermark')).toHaveLength(1)
+    expect(s.value.layers).not.toContain('nope')
+    // 用户把水印排在最前的意图保留
+    expect(s.value.layers[0]).toBe('watermark')
+    expect(s.value.layers).toContain('subtitle')
+  })
+
+  it('图层顺序中的自定义元素在元素被剔除后一并清理', () => {
+    localStorage.setItem(KEY, legacyArchive({
+      customElements: [{ id: 'bad', kind: 'image', content: 'https://evil/x.png', text: '',
+        size: 40, anchor: { x: 0.5, y: 0.5, scale: 1 },
+        color: '#ffffff', bold: false, tracking: 0, round: false }],
+      layers: ['title', 'custom:bad'],
+    }))
+    const s = useCoverState()
+    expect(s.value.customElements).toEqual([])
+    expect(s.value.layers).not.toContain('custom:bad')
+  })
+
   it('颜色非 #rrggbb 的自定义元素被剔除（防标记注入）', () => {
     localStorage.setItem(KEY, legacyArchive({
       customElements: [

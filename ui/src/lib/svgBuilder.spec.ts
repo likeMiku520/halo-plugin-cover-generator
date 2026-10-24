@@ -184,14 +184,16 @@ describe.skipIf(!hasFont)('buildCoverSvg 分缝模式的字号一致性', () => 
 })
 
 describe.skipIf(!hasFont)('buildCoverSvg 整块排版模式', () => {
-  it('flow 模式把两段拼成一块并自动换行', () => {
+  it('flow 模式只用自身文本并自动换行', () => {
     const font = getFont()
     const svg = buildCoverSvg({
       state: {
         ...state,
         titleMode: 'flow',
-        titleLeft: '一个足够长的标题用来触发自动换行',
-        titleRight: '再加一段同样很长的内容',
+        titleFlow: '一个足够长的标题用来触发自动换行再加一段同样很长的内容',
+        // 分缝文本同时存在也不得混入：两种排版各自独立
+        titleLeft: '不应出现',
+        titleRight: '也不应出现',
       },
       font,
       defaultLogoDataUrl: 'data:image/png;base64,AAA',
@@ -205,11 +207,73 @@ describe.skipIf(!hasFont)('buildCoverSvg 整块排版模式', () => {
   it('flow 模式下短标题只有一行', () => {
     const font = getFont()
     const svg = buildCoverSvg({
-      state: { ...state, titleMode: 'flow', titleLeft: '短标题', titleRight: '' },
+      state: { ...state, titleMode: 'flow', titleFlow: '短标题', titleLeft: '', titleRight: '' },
       font,
       defaultLogoDataUrl: '',
     })
     expect(svg.match(/<path/g)!.length).toBe(1)
+  })
+
+  it('flow 模式文本为空时显示占位，不复用分缝文本', () => {
+    const font = getFont()
+    const svg = buildCoverSvg({
+      state: { ...state, titleMode: 'flow', titleFlow: '', titleLeft: '左', titleRight: '右' },
+      font,
+      defaultLogoDataUrl: '',
+    })
+    expect(svg).toContain('<g opacity="0.4">')
+  })
+})
+
+describe.skipIf(!hasFont)('buildCoverSvg 中缝间距与图层顺序', () => {
+  it('中缝间距可调：加大间距后两段向外分开', () => {
+    const font = getFont()
+    const measure = (gap: number) => {
+      const svg = buildCoverSvg({
+        state: { ...state, titleLeft: '工具', titleRight: '推荐', seamGap: gap },
+        font,
+        defaultLogoDataUrl: 'data:image/png;base64,AAA',
+      })
+      const paths = [...svg.matchAll(/<path transform="([^"]*)" d="([^"]*)"/g)]
+      return paths.map((p) => transformTranslateX(p[1]))
+    }
+    const small = measure(40)
+    const large = measure(200)
+    // 左段左移、右段右移，两者间距随 seamGap 增大
+    expect(large[0]).toBeLessThan(small[0])
+    expect(large[1]).toBeGreaterThan(small[1])
+  })
+
+  it('图层顺序决定绘制先后：靠后者出现在标记更后面', () => {
+    const font = getFont()
+    const withOrder = (layers: string[]) => buildCoverSvg({
+      state: {
+        ...state,
+        subtitle: '副标题',
+        watermark: 'example.com',
+        layers: layers as never,
+      },
+      font,
+      defaultLogoDataUrl: 'data:image/png;base64,AAA',
+    })
+    const titleFirst = withOrder(['title', 'subtitle', 'logo', 'watermark'])
+    const titleLast = withOrder(['subtitle', 'logo', 'watermark', 'title'])
+    const indexOfTitle = (svg: string) => svg.indexOf('<g filter="url(#shadow)">')
+    expect(indexOfTitle(titleFirst)).toBeLessThan(indexOfTitle(titleLast))
+    // 两次都只画一次标题，元素不会因重排而重复或丢失
+    expect(titleFirst.match(/<g filter="url\(#shadow\)">/g)!.length).toBe(1)
+    expect(titleLast.match(/<g filter="url\(#shadow\)">/g)!.length).toBe(1)
+  })
+
+  it('图层表缺失的元素补画在末尾，不会消失', () => {
+    const font = getFont()
+    const svg = buildCoverSvg({
+      state: { ...state, subtitle: '副标题', layers: ['title'] as never },
+      font,
+      defaultLogoDataUrl: '',
+    })
+    // 图层表只声明了 title，副标题仍须被画出
+    expect(svg.match(/<path/g)!.length).toBeGreaterThanOrEqual(2)
   })
 })
 

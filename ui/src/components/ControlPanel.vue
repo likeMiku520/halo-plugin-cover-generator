@@ -7,6 +7,7 @@ import { CANVAS_PRESETS, describeCanvas, presetOfId } from '../lib/canvasPresets
 import { validateLogoUrl, fetchLogoAsDataUrl } from '../lib/logoFetcher'
 import GradientPicker from './GradientPicker.vue'
 import ElementsPanel from './ElementsPanel.vue'
+import SliderField from './SliderField.vue'
 
 /**
  * 控制面板(评审 V2/S1):承担「画布 + 内容 + 外观 + 元素」四组输入;
@@ -180,39 +181,57 @@ const mediaSub = computed(() => {
           整块排版
         </button>
       </div>
-      <div class="row2">
+
+      <!-- 两种排版各有独立文本:切换模式不会互相覆盖,方便来回比较 -->
+      <div v-if="modelValue.titleMode === 'split'" class="row2">
         <input
           :value="modelValue.titleLeft"
           class="sd-field"
-          :placeholder="modelValue.titleMode === 'split' ? '左段' : '标题前半'"
+          placeholder="左段"
           aria-label="标题左段"
           @input="set({ titleLeft: ($event.target as HTMLInputElement).value })"
         />
         <input
           :value="modelValue.titleRight"
           class="sd-field"
-          :placeholder="modelValue.titleMode === 'split' ? '右段' : '标题后半'"
+          placeholder="右段"
           aria-label="标题右段"
           @input="set({ titleRight: ($event.target as HTMLInputElement).value })"
         />
       </div>
-      <p v-if="modelValue.titleMode === 'split'" class="hint">
-        两段共用同一字号并按长度取齐,不会出现短的一边字号更大;中缝位置可在预览里拖动
-      </p>
+      <input
+        v-else
+        :value="modelValue.titleFlow"
+        class="sd-field full"
+        placeholder="整块标题，超宽自动换行"
+        aria-label="整块标题"
+        @input="set({ titleFlow: ($event.target as HTMLInputElement).value })"
+      />
+
+      <template v-if="modelValue.titleMode === 'split'">
+        <div class="lb pad-top"><b>中缝间距</b><span class="meta">左右两段的距离</span></div>
+        <SliderField
+          :model-value="modelValue.seamGap"
+          :min="0"
+          :max="400"
+          :step="4"
+          label="中缝间距"
+          suffix="px"
+          @update:model-value="set({ seamGap: $event })"
+        />
+      </template>
 
       <div class="lb pad-top">
-        <b>标题字号</b><span class="meta">{{ modelValue.titleFontSize }} px</span>
+        <b>标题字号</b><span class="meta">与「元素 → 大小」联动</span>
       </div>
-      <input
-        type="range"
-        min="100"
-        max="210"
-        step="5"
-        class="slider"
-        :style="{ '--fill': `${((modelValue.titleFontSize - 100) / 110) * 100}%` }"
-        :value="modelValue.titleFontSize"
-        aria-label="标题字号"
-        @input="set({ titleFontSize: Number(($event.target as HTMLInputElement).value) })"
+      <SliderField
+        :model-value="modelValue.titleFontSize"
+        :min="100"
+        :max="210"
+        :step="5"
+        label="标题字号"
+        suffix="px"
+        @update:model-value="set({ titleFontSize: $event })"
       />
 
       <!-- 副标题/域名水印:短文本字段与标题列同构的双列布局,不撑满整行(实机反馈) -->
@@ -520,6 +539,11 @@ const mediaSub = computed(() => {
 .row2 input {
   flex: 1;
   min-width: 0;
+}
+
+/* 整块标题输入独占一行 */
+.sd-field.full {
+  width: 100%;
 }
 .row2.pad-top {
   margin-top: var(--pit-sp-4);

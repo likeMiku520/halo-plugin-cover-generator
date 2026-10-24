@@ -33,6 +33,9 @@ export type AnchorKey = 'logo' | 'title' | 'subtitle' | 'watermark'
 
 export type AnchorMap = Record<AnchorKey, Anchor>
 
+/** 图层键：内置元素用自身键，自定义元素用 `custom:<id>` */
+export type LayerKey = AnchorKey | `custom:${string}`
+
 /** 标题排版模式：split 为左右两段各自求齐中缝，flow 为整块自动换行 */
 export type TitleMode = 'split' | 'flow'
 
@@ -64,10 +67,14 @@ export interface CustomElement {
 
 /** 封面全部可编辑状态 */
 export interface CoverState {
-  /** 标题左段（分缝模式下右对齐中缝） */
+  /** 分缝模式的左段（与整块模式各自独立，切换模式互不覆盖） */
   titleLeft: string
-  /** 标题右段（分缝模式下左对齐中缝） */
+  /** 分缝模式的右段 */
   titleRight: string
+  /** 整块模式的标题文本 */
+  titleFlow: string
+  /** 分缝中缝两侧的间距（px，按参考画布宽） */
+  seamGap: number
   /** 标题基准字号（100–210）；超宽时仍自动缩小兜底 */
   titleFontSize: number
   /** 标题排版模式 */
@@ -85,8 +92,10 @@ export interface CoverState {
   canvas: CanvasSize
   /** 标题/副标题/Logo/水印的位置与缩放 */
   layout: AnchorMap
-  /** 用户追加的元素（图片/文字/SVG），按数组顺序叠加在最上层 */
+  /** 自定义元素；按数组顺序即默认叠放顺序 */
   customElements: CustomElement[]
+  /** 图层顺序：数组靠后者绘制在上层，可含内置元素与自定义元素 */
+  layers: LayerKey[]
 }
 
 /** 标题拆分结果：左段右对齐中缝、右段左对齐中缝 */

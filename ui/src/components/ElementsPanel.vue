@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { FormKit } from '@formkit/vue'
 import type { AnchorKey, CoverState, CustomElement, CustomKind, LayerKey } from '../lib/types'
 import { defaultAnchors, normalizeAnchor } from '../lib/layout'
 import { anchorLabel, type SelectionId } from '../composables/useCanvasInteraction'
-import { fetchLogoAsDataUrl, validateLogoUrl } from '../lib/logoFetcher'
+import { fetchLogoAsDataUrl, fetchAttachmentAsDataUrl, validateLogoUrl } from '../lib/logoFetcher'
 import { sanitizeSvgMarkup } from '../lib/svgSanitizer'
+import { HEX6, firstMarkupColor, recolorSvgMarkup } from '../lib/svgColor'
 import { MAX_CUSTOM_ELEMENTS } from '../composables/useCoverState'
-import IconifyPicker from './IconifyPicker.vue'
+import type { AttachmentSummary } from '../api/haloClient'
+import AttachmentPicker from './AttachmentPicker.vue'
 import SliderField from './SliderField.vue'
 
 /**
@@ -236,15 +239,42 @@ async function addImageFromUrl() {
   }
 }
 
+/**
+ * 从博客附件选图:与上传同一条边界(取回后内嵌为 dataURL),
+ * 入档形态与本地文件上传完全一致,渲染与导出无需区分来源。
+ */
+async function onPickAttachmentImage(attachment: AttachmentSummary) {
+  if (busy.value || !canAdd.value) return
+  busy.value = true
+  elementError.value = ''
+  try {
+    appendElement(newElement('image', { content: await fetchAttachmentAsDataUrl(attachment.link) }))
+  } catch (e) {
+    elementError.value = e instanceof Error ? e.message : '附件读取失败'
+  } finally {
+    busy.value = false
+  }
+}
+
 /** 任何来源的 SVG 都经同一条白名单过滤后入库 */
-function useSvgMarkup(raw: string) {
+function useSvgMarkup(raw: string, patch: Partial<CustomElement> = {}) {
   const result = sanitizeSvgMarkup(raw)
   if (!result.ok) {
     elementError.value = result.reason
     return false
   }
-  appendElement(newElement('svg', { content: result.markup, size: 120 }))
+  appendElement(newElement('svg', { content: result.markup, size: 120, ...patch }))
   return true
+}
+
+/** 元素取色:svg 的标记需要同步改写,其余元素只改颜色字段 */
+function onElementColor(id: string, next: string) {
+  const el = props.modelValue.customElements.find((e) => e.id === id)
+  if (!el) return
+  updateElement(id, {
+    color: next,
+    content: el.kind === 'svg' ? recolorSvgMarkup(el.content, el.color, next) : el.content,
+  })
 }
 
 function onPickSvgFile(ev: Event) {
@@ -276,6 +306,42 @@ async function addSvgFromUrl() {
   } finally {
     busy.value = false
   }
+}
+
+/**
+ * Halo 内置 Iconify 选择器的回填形态。
+ *
+ * 未开 valueOnly 时回填该对象(halo 2.26 的 formkit/inputs/iconify/types.ts 里
+ * 的 IconifyValue):value 是取回的 SVG 标记、color 是确认面板里取的色。
+ * 这里按结构声明而不 import 该类型——它只存在于 Halo 应用源码中,
+ * 不在任何可导入的包内。
+ */
+interface IconifyPick {
+  value?: string
+  name?: string
+  width?: string
+  color?: string
+}
+
+/** 图标选择器回填:取回的颜色改写为 currentColor,颜色从此只由渲染期解析 */
+function onIconPicked(pick: unknown) {
+  const icon = (typeof pick === 'string' ? { value: pick } : pick) as IconifyPick | null
+  const raw = icon?.value?.trim()
+  if (!raw) return
+  const result = sanitizeSvgMarkup(raw)
+  if (!result.ok) {
+    elementError.value = `该图标无法使用:${result.reason}`
+    return
+  }
+  const picked = icon?.color?.trim() ?? ''
+  const color = HEX6.test(picked) ? picked : firstMarkupColor(result.markup) || '#ffffff'
+  appendElement(
+    newElement('svg', {
+      content: recolorSvgMarkup(result.markup, color, 'currentColor'),
+      size: 120,
+      color,
+    }),
+  )
 }
 
 function sizeRange(kind: CustomKind): { min: number; max: number } {
@@ -409,13 +475,13 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
             />
           </div>
           <div class="row2">
-            <label v-if="activeElement.kind === 'text'" class="field">
+            <label v-if="activeElement.kind !== 'image'" class="field">
               <span class="lb">颜色</span>
               <input
                 class="sd-field color"
                 type="color"
                 :value="activeElement.color"
-                @input="updateElement(activeElement.id, { color: ($event.target as HTMLInputElement).value })"
+                @input="onElementColor(activeElement.id, ($event.target as HTMLInputElement).value)"
               />
             </label>
             <label class="tg">
@@ -474,10 +540,13 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
           <input v-model="imageUrl" class="sd-field" placeholder="或粘贴图片直链 https://…" aria-label="图片直链" />
           <button type="button" class="sd-btn-quiet" :disabled="busy || !canAdd" @click="addImageFromUrl">导入</button>
         </div>
+        <div class="picker-slot">
+          <AttachmentPicker @pick="onPickAttachmentImage" />
+        </div>
       </template>
 
       <template v-else>
-        <IconifyPicker color="#ffffff" @pick="useSvgMarkup" />
+        <FormKit type="iconify" format="svg" @input="onIconPicked" />
         <button type="button" class="sd-btn-ghost source-toggle" @click="showSvgSource = !showSvgSource">
           {{ showSvgSource ? '收起手写 SVG' : '手写 / 上传 SVG' }}
         </button>
@@ -533,6 +602,11 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
   margin: 8px 0 0;
   font-size: var(--sd-fs-sm);
   color: var(--sd-danger-text);
+}
+
+/* 附件库入口:与上方的直链导入行留出间距 */
+.picker-slot {
+  margin-top: 8px;
 }
 
 /* ---- 元素列表:内置与自定义同构,行高一致 ---- */

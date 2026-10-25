@@ -134,3 +134,21 @@ describe('ControlPanel 字体加载状态外显(C3)', () => {
     ready.unmount()
   })
 })
+
+describe('ControlPanel 标题字号单一入口(内容区滑块已移除)', () => {
+  it('内容分区不再渲染「标题字号」滑杆,同一张卡片的其它控件不受影响', () => {
+    const wrapper = mountPanel({ ...baseState, titleMode: 'split' })
+    expect(wrapper.text()).not.toContain('标题字号')
+    expect(wrapper.text()).toContain('中缝间距')
+    expect(wrapper.text()).toContain('副标题')
+    wrapper.unmount()
+  })
+
+  it('整块排版下同样没有标题字号入口', () => {
+    const wrapper = mountPanel({ ...baseState, titleMode: 'flow' })
+    expect(wrapper.text()).not.toContain('标题字号')
+    // 整块排版的输入框仍在(placeholder 是属性,不在 text() 里)
+    expect(wrapper.find('input[aria-label="整块标题"]').attributes('placeholder')).toContain('整块标题')
+    wrapper.unmount()
+  })
+})

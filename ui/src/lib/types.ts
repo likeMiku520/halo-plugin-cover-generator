@@ -56,7 +56,7 @@ export interface CustomElement {
   /** image/svg 为基准边长（px）；text 为字号（px） */
   size: number
   anchor: Anchor
-  /** 仅 text 使用 */
+  /** text 的文字颜色;svg 的图标颜色(标记按 currentColor 入库,渲染期由它解析) */
   color: string
   bold: boolean
   /** 仅 text 使用：字距（em） */

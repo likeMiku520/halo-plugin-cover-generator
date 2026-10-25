@@ -27,6 +27,9 @@ importers:
         specifier: ^3.5.40
         version: 3.5.42(typescript@6.0.3)
     devDependencies:
+      '@formkit/vue':
+        specifier: 2.1.2
+        version: 2.1.2(vue@3.5.42(typescript@6.0.3))
       '@halo-dev/ui-plugin-bundler-kit':
         specifier: ^2.26.0
         version: 2.26.0(@rsbuild/core@2.2.3)(@rsbuild/plugin-vue@2.0.1(@rsbuild/core@2.2.3)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(@vue/compiler-sfc@3.5.42)(vue@3.5.42(typescript@6.0.3)))(@vitejs/plugin-vue@6.0.8(vite@8.2.2(@types/node@24.13.3)(jiti@2.7.0)(sass@1.104.0)(yaml@2.9.0))(vue@3.5.42(typescript@6.0.3)))(axios@1.20.0)(vite@8.2.2(@types/node@24.13.3)(jiti@2.7.0)(sass@1.104.0)(yaml@2.9.0))
@@ -250,6 +253,38 @@ packages:
 
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
+
+  '@formkit/core@2.1.2':
+    resolution: {integrity: sha512-uv3NUXQkqyjvT2VILdcDWvO99Ql69zA93RiInqBXMyuA6UyFTJvc/LQt352diP951k0bDGWG4ar0g1GI2/EtYQ==}
+
+  '@formkit/dev@2.1.2':
+    resolution: {integrity: sha512-cYFyx6zcOoQ8wzxQlsk2QFkHmDzPp+JJmuDopyvNvHl3fd9fgsgMHbLElk55IstEHXCCQJqFS17lN+Q9a88bkQ==}
+
+  '@formkit/i18n@2.1.2':
+    resolution: {integrity: sha512-nS331IGfE3SzpcZMRqXtCqnv/niP+NHmK6jurRiuNoRUERhLTzi9dbhltzQshrP7sBkCtmtV0GU8lsYpWheliA==}
+
+  '@formkit/inputs@2.1.2':
+    resolution: {integrity: sha512-UskS/aUnO/xGXzBaERC11H98xP4fpTcJaVSJenyylf/dX47QbKatYHjAtF4zny9AFkspfLDLXy4aAocjtZgrrg==}
+
+  '@formkit/observer@2.1.2':
+    resolution: {integrity: sha512-LOf8wlYdqNBLcq/9UNd6KiIpvy5ZmJm24+G+KeIr8fTzb5dBmvEtg7ptCJEQ6sHdGzouzxXB7MeJwkDlMlTCPQ==}
+
+  '@formkit/rules@2.1.2':
+    resolution: {integrity: sha512-gZYwqUW8cM+KStAR1aPTQYxQNDyz9SE8nMVijrCG7m6TeXIatX60eQdp75eIZWFwpwTL/I9avfFKKsAL8FJEhA==}
+
+  '@formkit/themes@2.1.2':
+    resolution: {integrity: sha512-hcrrr6O0xt1MDGtHFRjpz2GuH0n79m555/ggmzI8SU96PDOJdtC6VHSw2ZGDFQx3kdT37HY+J+ZxWct93OPpDw==}
+
+  '@formkit/utils@2.1.2':
+    resolution: {integrity: sha512-ZbPWhmQKkx5ojGW+r14WfrubnhWWdeTlm/rTiVjZExFQhsmQa6hCu35l0z/EeLb04UhXjoZP/IXBJ+/QU5ZMGw==}
+
+  '@formkit/validation@2.1.2':
+    resolution: {integrity: sha512-POPh16pcnpFU2bqkd0xeTz4YNxGVMOi9ykpbaTuc28oxE6l7vPNoRfKQLTp4jhuDfMoUQ9We2jOHsz3GbqA/FQ==}
+
+  '@formkit/vue@2.1.2':
+    resolution: {integrity: sha512-KmFeJRJrVhn08jl8ZM18dbuiAbhv9nta8eSBU2s0GRrvzF8Q4zzzE39bxo/i8NviKyHcpjy5uxCgHu73M9KQoA==}
+    peerDependencies:
+      vue: ^3.4.0
 
   '@halo-dev/api-client@2.26.0':
     resolution: {integrity: sha512-z80aGP8sbTcX+s9//Q1XdF7iUByKUylAH3fJuO58pN1plQAWkClRaEiIXn56PBwL3/iPUd/RnuI7BMVTBj5Ysg==}
@@ -2431,6 +2466,62 @@ snapshots:
       '@floating-ui/core': 1.8.0
 
   '@floating-ui/utils@0.2.12': {}
+
+  '@formkit/core@2.1.2':
+    dependencies:
+      '@formkit/utils': 2.1.2
+
+  '@formkit/dev@2.1.2':
+    dependencies:
+      '@formkit/core': 2.1.2
+      '@formkit/utils': 2.1.2
+
+  '@formkit/i18n@2.1.2':
+    dependencies:
+      '@formkit/core': 2.1.2
+      '@formkit/utils': 2.1.2
+      '@formkit/validation': 2.1.2
+
+  '@formkit/inputs@2.1.2':
+    dependencies:
+      '@formkit/core': 2.1.2
+      '@formkit/utils': 2.1.2
+
+  '@formkit/observer@2.1.2':
+    dependencies:
+      '@formkit/core': 2.1.2
+      '@formkit/utils': 2.1.2
+
+  '@formkit/rules@2.1.2':
+    dependencies:
+      '@formkit/core': 2.1.2
+      '@formkit/utils': 2.1.2
+      '@formkit/validation': 2.1.2
+
+  '@formkit/themes@2.1.2':
+    dependencies:
+      '@formkit/core': 2.1.2
+
+  '@formkit/utils@2.1.2': {}
+
+  '@formkit/validation@2.1.2':
+    dependencies:
+      '@formkit/core': 2.1.2
+      '@formkit/observer': 2.1.2
+      '@formkit/utils': 2.1.2
+
+  '@formkit/vue@2.1.2(vue@3.5.42(typescript@6.0.3))':
+    dependencies:
+      '@formkit/core': 2.1.2
+      '@formkit/dev': 2.1.2
+      '@formkit/i18n': 2.1.2
+      '@formkit/inputs': 2.1.2
+      '@formkit/observer': 2.1.2
+      '@formkit/rules': 2.1.2
+      '@formkit/themes': 2.1.2
+      '@formkit/utils': 2.1.2
+      '@formkit/validation': 2.1.2
+      vue: 3.5.42(typescript@6.0.3)
 
   '@halo-dev/api-client@2.26.0(axios@1.20.0)':
     dependencies:

@@ -4,7 +4,9 @@ import type { CoverState } from '../lib/types'
 import type { SelectionId } from '../composables/useCanvasInteraction'
 import type { FontLike } from '../lib/svgBuilder'
 import { CANVAS_PRESETS, describeCanvas, presetOfId } from '../lib/canvasPresets'
-import { validateLogoUrl, fetchLogoAsDataUrl } from '../lib/logoFetcher'
+import { validateLogoUrl, fetchLogoAsDataUrl, fetchAttachmentAsDataUrl } from '../lib/logoFetcher'
+import type { AttachmentSummary } from '../api/haloClient'
+import AttachmentPicker from './AttachmentPicker.vue'
 import GradientPicker from './GradientPicker.vue'
 import ElementsPanel from './ElementsPanel.vue'
 import SliderField from './SliderField.vue'
@@ -109,6 +111,22 @@ async function importFromUrl() {
 /** 恢复默认 Logo:有内置默认则回退到默认图,无(设置 logoUrl 为空)则直接隐藏 */
 function restoreDefaultLogo() {
   set({ logoDataUrl: null, logoHidden: !props.defaultLogoUrl })
+}
+
+const attachmentBusy = ref(false)
+
+/** 从博客附件选图:取回并内嵌为 dataURL,与上传/链接导入同一条自包含边界 */
+async function onPickAttachment(attachment: AttachmentSummary) {
+  if (attachmentBusy.value) return
+  attachmentBusy.value = true
+  uploadError.value = ''
+  try {
+    set({ logoDataUrl: await fetchAttachmentAsDataUrl(attachment.link) })
+  } catch (e) {
+    uploadError.value = e instanceof Error ? e.message : '附件读取失败'
+  } finally {
+    attachmentBusy.value = false
+  }
 }
 
 /** 当前生效 Logo(缩略图展示与预览同源:自定义优先,回退内置默认) */
@@ -221,18 +239,8 @@ const mediaSub = computed(() => {
         />
       </template>
 
-      <div class="lb pad-top">
-        <b>标题字号</b><span class="meta">与「元素 → 大小」联动</span>
-      </div>
-      <SliderField
-        :model-value="modelValue.titleFontSize"
-        :min="100"
-        :max="210"
-        :step="5"
-        label="标题字号"
-        suffix="px"
-        @update:model-value="set({ titleFontSize: $event })"
-      />
+      <!-- 标题字号已收敛到「元素 → 标题 → 大小」单一入口:
+           两处数值控件操作同一个量时,在任一处拖动另一处不同步,读起来像「拖了没反应」 -->
 
       <!-- 副标题/域名水印:短文本字段与标题列同构的双列布局,不撑满整行(实机反馈) -->
       <div class="row2 pad-top">
@@ -326,6 +334,11 @@ const mediaSub = computed(() => {
           {{ importing ? '导入中…' : '导入' }}
         </button>
       </div>
+      <!-- 附件库:站内已上传的图直接选,不必先下载再本地上传 -->
+      <div class="picker-slot">
+        <AttachmentPicker @pick="onPickAttachment" />
+      </div>
+      <p v-if="attachmentBusy" class="hint" role="status">正在读取附件图片…</p>
       <p class="hint">上传或链接导入的图都会转 Base64 内嵌(≤ 2 MB),导出的 SVG 不依赖外链,单文件可用</p>
       <p v-if="proxyNotice" class="hint proxy-notice" role="status">
         已通过公共代理 wsrv.nl 获取:图片链接已发送给第三方服务
@@ -428,6 +441,11 @@ const mediaSub = computed(() => {
 }
 .lb.pad-top {
   margin-top: var(--pit-sp-4);
+}
+
+/* 附件库入口:与上方的链接导入行留出间距 */
+.picker-slot {
+  margin-top: 8px;
 }
 .lb b {
   font-size: var(--sd-fs-md);

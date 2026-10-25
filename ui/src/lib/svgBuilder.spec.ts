@@ -470,3 +470,39 @@ describe.skipIf(!hasFont)('buildCoverSvg 光影 / 噪点 / 水印', () => {
     }
   })
 })
+
+describe('自定义 svg 图标的颜色解析', () => {
+  /** 图标选择器取回的标记按 currentColor 入库,颜色只存在于元素状态里 */
+  const ICON_ELEMENT = {
+    id: 'ce1',
+    kind: 'svg' as const,
+    content: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M0 0h24v24H0z"/></svg>',
+    text: '',
+    size: 120,
+    anchor: { x: 0.5, y: 0.5, scale: 1 },
+    color: '#39C5BB',
+    bold: false,
+    tracking: 0,
+    round: false,
+  }
+
+  it('把元素颜色写成 g 的 color 属性,标记里的 currentColor 才能解析出颜色', () => {
+    const svg = buildCoverSvg({
+      state: { ...state, customElements: [ICON_ELEMENT] },
+      font: null,
+      defaultLogoDataUrl: '',
+    })
+    expect(svg).toContain('color="#39C5BB"')
+    expect(svg).toContain('fill="currentColor"')
+  })
+
+  it('颜色取自元素状态,改色只改这一处属性', () => {
+    const svg = buildCoverSvg({
+      state: { ...state, customElements: [{ ...ICON_ELEMENT, color: '#f59e0b' }] },
+      font: null,
+      defaultLogoDataUrl: '',
+    })
+    expect(svg).toContain('color="#f59e0b"')
+    expect(svg).not.toContain('color="#39C5BB"')
+  })
+})

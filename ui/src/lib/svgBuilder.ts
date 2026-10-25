@@ -602,6 +602,8 @@ function customElementLayer(
   const scale = size / Math.max(vw, vh)
   const offsetX = -vx - vw / 2
   const offsetY = -vy - vh / 2
-  return clipDefs + `<g transform="translate(${r2(x)} ${r2(y)}) scale(${r2(scale)}) ` +
+  // color 是 color 属性的呈现属性,标记里的 currentColor 由它解析:
+  // 图标按 currentColor 入库,颜色因此是渲染期输入,改色无需重取标记
+  return clipDefs + `<g color="${esc(el.color)}" transform="translate(${r2(x)} ${r2(y)}) scale(${r2(scale)}) ` +
     `translate(${r2(offsetX)} ${r2(offsetY)})"${cp}>${inner}</g>`
 }

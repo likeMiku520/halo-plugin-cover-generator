@@ -215,3 +215,73 @@ export async function updatePostCover(postName: string, coverUrl: string): Promi
     throw new Error(toBindCoverErrorMessage(e))
   }
 }
+
+/** 附件选择器的一条候选:link 为可直接取图的地址 */
+export interface AttachmentSummary {
+  name: string
+  displayName: string
+  /** status.permalink:Console 写入文章 cover 的同款公开地址 */
+  link: string
+  /** 缩略图地址;无缩略图服务时为空串,由调用方退回 link */
+  thumb: string
+}
+
+/** 附件列表的一页:hasNext 供「加载更多」,total 供空态与计数 */
+export interface AttachmentPage {
+  items: AttachmentSummary[]
+  total: number
+  hasNext: boolean
+}
+
+/**
+ * Console 附件检索端点(GET /apis/api.console.halo.run/v1alpha1/attachments):
+ * 与上传、文章检索同作用域同会话鉴权,accepts 按媒体类型过滤,只列图片。
+ * permalink 沿用上传路径的取值链(status.permalink)。
+ */
+const ATTACHMENT_LIST_PATH = '/apis/api.console.halo.run/v1alpha1/attachments'
+
+/** 附件检索失败的中文化(与上传/绑定/文章检索同一 detail → title → 兜底三级取值) */
+function toListAttachmentsErrorMessage(e: unknown): string {
+  const reason = detailOf(e)
+  return reason ? `读取附件库失败:${reason}` : '读取附件库失败,请稍后重试'
+}
+
+/** 列表项中取展示与取图所需字段的最小形状 */
+interface AttachmentItemLike {
+  metadata?: { name?: string }
+  spec?: { displayName?: string }
+  status?: { permalink?: string; thumbnails?: Record<string, string> }
+}
+
+/**
+ * 检索图片附件。accepts 用 image/* 交给服务端过滤,客户端再按 mediaType 无关字段
+ * 兜底——permalink 缺失的条目(对象存储未回填等)无法取图,直接从候选里剔除,
+ * 否则选择器会出现点不动的空格子。
+ */
+export async function listImageAttachments(
+  keyword: string,
+  page: number,
+  size: number,
+): Promise<AttachmentPage> {
+  let data: { items?: AttachmentItemLike[]; total?: number; hasNext?: boolean }
+  try {
+    const res = await axiosInstance.get(ATTACHMENT_LIST_PATH, {
+      params: { page, size, keyword, accepts: ['image/*'] },
+    })
+    data = (res.data ?? {}) as typeof data
+  } catch (e) {
+    throw new Error(toListAttachmentsErrorMessage(e))
+  }
+  const items = (data.items ?? [])
+    .map((item) => {
+      const thumbs = item.status?.thumbnails ?? {}
+      return {
+        name: item.metadata?.name ?? '',
+        displayName: item.spec?.displayName || item.metadata?.name || '',
+        link: item.status?.permalink ?? '',
+        thumb: thumbs.S ?? thumbs.M ?? Object.values(thumbs)[0] ?? '',
+      }
+    })
+    .filter((a) => a.link !== '')
+  return { items, total: data.total ?? items.length, hasNext: Boolean(data.hasNext) }
+}

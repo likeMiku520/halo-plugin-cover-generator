@@ -59,3 +59,14 @@ async function viaFetch(url: string): Promise<string> {
     reader.readAsDataURL(blob)
   })
 }
+
+/**
+ * 把站内附件取回为 dataURL(导出 SVG 自包含,附件也必须内嵌)。
+ *
+ * 与 fetchLogoAsDataUrl 的唯一区别是**不做公共代理回退**:附件与 Console 同源,
+ * 不存在跨域问题;把站内地址(可能含内网主机名或签名参数)交给第三方图片代理
+ * 既无必要,也把内部信息外发了。
+ */
+export async function fetchAttachmentAsDataUrl(url: string): Promise<string> {
+  return await viaFetch(url)
+}

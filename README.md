@@ -3,7 +3,7 @@
 一款 Halo 2.x Console 插件:在 Console 内为文章生成封面图,一键保存为站点附件并绑定文章封面。纯前端渲染(标题以矢量路径内嵌,零字体依赖),无需任何第三方图像服务。
 
 - 作者:fufu大王 · [blog.fufu520.cn](https://blog.fufu520.cn)
-- 许可:GPL-3.0(可自由使用、修改与再分发)
+- 许可:GPL-3.0
 - 环境要求:Halo `>=2.26.0`
 
 ## 功能
@@ -106,7 +106,7 @@ cd ../.visual-out && python ../scripts/render_svg.py 01-split-default 02-split-u
 
 ## 许可证
 
-[GPL-3.0](./LICENSE) — 任何人可自由使用、修改与再分发。
+[GPL-3.0](./LICENSE) 
 
 本项目派生自 [baoxinwen/halo-plugin-cover-generator](https://github.com/baoxinwen/halo-plugin-cover-generator)(GPL-3.0),按同一许可继续分发。
 

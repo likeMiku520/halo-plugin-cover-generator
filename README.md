@@ -115,5 +115,4 @@ cd ../.visual-out && python ../scripts/render_svg.py 01-split-default 02-split-u
 
 ## 致谢
 
-- 上游作者[baoxinwen](https://github.com/baoxinwen):本项目的版式与导出基线来自他的工作
-- 图标库 [Iconify](https://iconify.design/)
+- 上游作者[baoxinwen](https://github.com/baoxinwen):本项目的版式与导出基线来自他的工作。

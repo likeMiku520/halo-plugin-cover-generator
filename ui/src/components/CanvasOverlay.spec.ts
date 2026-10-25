@@ -540,6 +540,35 @@ describe('CanvasOverlay 选中框手柄', () => {
     expect(w.emitted('interacting')).toEqual([[true], [false]])
   })
 
+  it('拖旋转手柄时吸附到 45° 的整数倍(写回的就是吸附值)', async () => {
+    const state = makeState()
+    const w = mountOverlay(state, { selected: 'title' })
+    const center = anchorPx(state, 'title')
+    /** 以锚点为圆心、半径 100px 的角度落点 */
+    const at = (angle: number) => ({
+      clientX: center.x + 100 * Math.cos((angle * Math.PI) / 180),
+      clientY: center.y + 100 * Math.sin((angle * Math.PI) / 180),
+    })
+
+    pointerOn(w.find('.handle-rotate').element, 'pointerdown', at(0))
+    await nextTick()
+
+    // 转到 87°：距 90° 只有 3° ⇒ 写回 90
+    pointer(w, 'pointermove', at(87))
+    await nextTick()
+    expect(lastAnchor(w)).toEqual(['title', { rotation: 90 }])
+
+    // 转到 132°：距 135° 只有 3° ⇒ 写回 135
+    pointer(w, 'pointermove', at(132))
+    await nextTick()
+    expect(lastAnchor(w)).toEqual(['title', { rotation: 135 }])
+
+    // 转到 112°：离任何磁力点都远 ⇒ 保持连续角度
+    pointer(w, 'pointermove', at(112))
+    await nextTick()
+    expect(lastAnchor(w)).toEqual(['title', { rotation: 112 }])
+  })
+
   it('旋转后再拖动位置仍是同一个元素(两个会话互不干扰)', async () => {
     const state = makeState()
     const w = mountOverlay(state, { selected: 'title' })

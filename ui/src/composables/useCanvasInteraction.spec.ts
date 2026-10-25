@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   anchorOfTargets, canDeleteSelection, clampScalePercent, deleteSelection, hitTest,
-  useCanvasDrag, useCanvasInteraction,
+  ROTATION_MAGNETS, useCanvasDrag, useCanvasInteraction,
   type AnchorSource, type SelectionId,
 } from './useCanvasInteraction'
 import type { Anchor, AnchorMap, CustomElement, LayerKey } from '../lib/types'
@@ -558,6 +558,67 @@ describe('useCanvasDrag 旋转手柄', () => {
     const turned = drag.rotateTo({ x: 612 / 1024, y: (256 + 100) / 512 }, wide)
 
     expect(turned?.rotation).toBeCloseTo(45, 6)
+  })
+
+  describe('角度磁力(仅手柄拖动)', () => {
+    /** 磁力点附近的落点：-180 从 +3° 一侧靠近（atan2 的值域是 (-180,180]，-183° 会绕回 177°） */
+    const nearMagnet = (m: number) => atAngle(m === -180 ? -177 : m - 3)
+
+    it.each(ROTATION_MAGNETS)('落点距 %d° 在阈值内即吸到该磁力点', (magnet) => {
+      const drag = beginRotateAt(0)
+
+      expect(drag.rotateTo(nearMagnet(magnet), CANVAS)?.rotation).toBe(magnet)
+    })
+
+    it('负角度同样吸:0° 附近从负侧靠近、-45° 附近也吸', () => {
+      expect(beginRotateAt(0).rotateTo(atAngle(-3), CANVAS)?.rotation).toBe(0)
+      expect(beginRotateAt(0).rotateTo(atAngle(-48), CANVAS)?.rotation).toBe(-45)
+      expect(beginRotateAt(0).rotateTo(atAngle(-92), CANVAS)?.rotation).toBe(-90)
+    })
+
+    it('离磁力点远时不吸:角度保持连续', () => {
+      expect(beginRotateAt(0).rotateTo(atAngle(22), CANVAS)?.rotation).toBe(22)
+      expect(beginRotateAt(0).rotateTo(atAngle(60), CANVAS)?.rotation).toBe(60)
+      expect(beginRotateAt(0).rotateTo(atAngle(-70), CANVAS)?.rotation).toBe(-70)
+    })
+
+    it('阈值边界:正好 5° 吸住,6° 就自由(闭区间的两端都验)', () => {
+      expect(beginRotateAt(0).rotateTo(atAngle(5), CANVAS)?.rotation).toBe(0) // 距 0° 正好 5° ⇒ 吸
+      expect(beginRotateAt(0).rotateTo(atAngle(6), CANVAS)?.rotation).toBe(6)
+      expect(beginRotateAt(0).rotateTo(atAngle(40), CANVAS)?.rotation).toBe(45) // 距 45° 正好 5° ⇒ 吸
+      expect(beginRotateAt(0).rotateTo(atAngle(39), CANVAS)?.rotation).toBe(39) // 6° ⇒ 不吸
+    })
+
+    it('拖动过程中生效:同一次拖动里吸住、拖开后自然脱离', () => {
+      const drag = beginRotateAt(0)
+
+      // 每帧都从按下角重算，所以进出磁力点是即时的、不会粘住
+      expect(drag.rotateTo(atAngle(39), CANVAS)?.rotation).toBe(39) // 还差 6° ⇒ 自由
+      expect(drag.rotateTo(atAngle(44), CANVAS)?.rotation).toBe(45) // 进入阈值 ⇒ 吸住
+      expect(drag.rotateTo(atAngle(52), CANVAS)?.rotation).toBe(52) // 拖开 ⇒ 恢复连续
+      expect(drag.rotateTo(atAngle(88), CANVAS)?.rotation).toBe(90) // 靠近 90° ⇒ 又吸住
+    })
+
+    it('磁力不改变 ±180 的夹取语义:越过 180° 仍停在 180°,不环绕', () => {
+      // 从 -170° 横扫到 +170°：内核角 340°，够不着任何磁力点，被 normalizeRotation 夹在 180°
+      const past = beginRotateAt(-170)
+      expect(past.rotateTo(atAngle(170), CANVAS)?.rotation).toBe(180)
+      // 反向同理：内核角 -340° ⇒ 夹在 -180°
+      const reverse = beginRotateAt(170)
+      expect(reverse.rotateTo(atAngle(-170), CANVAS)?.rotation).toBe(-180)
+    })
+
+    it('磁力以「原角度 + 本次转角」为准:界外的原角度不被改写', () => {
+      // 原角度 42°，指针从 0° 转到 45° ⇒ 内核 87° ⇒ 吸到 90°
+      const drag = beginRotateAt(0, 42)
+      expect(drag.rotateTo(atAngle(45), CANVAS)?.rotation).toBe(90)
+      // 原角度 55°：离任何磁力点都超过阈值 ⇒ 原样保留
+      const kept = beginRotateAt(55, 55)
+      expect(kept.rotateTo(atAngle(55), CANVAS)?.rotation).toBe(55)
+      // 原角度 50° 落在 45° 的阈值内：一按下滑动就会被吸到 45°（磁力作用于当前角度）
+      const grabbed = beginRotateAt(50, 50)
+      expect(grabbed.rotateTo(atAngle(50), CANVAS)?.rotation).toBe(45)
+    })
   })
 
   it('旋转期间 interacting 为真,松手复位;未进入会话时 rotateTo 返回 null', () => {

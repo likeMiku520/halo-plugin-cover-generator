@@ -29,7 +29,7 @@ export interface TextFont {
  * 三种排布:
  * - 直线(默认):整段合成一条 path,输出与历史版本逐字一致;
  * - 圆弧:逐字给出自己的旋转与位移,只能一个字一条 path;
- * - 竖排:逐字沿 y 堆叠,一列排满可用高度后换列(按中文竖排的行序自右向左),
+ * - 竖排:逐字沿 y 堆叠,一列排满可用高度后换列(换列方向自左向右,见 layoutVertical),
  *   仍可合成一条 path(位置直接写进各自的字形坐标)。
  *
  * 换行的边界量按方向分工:横排给 maxW(超出则整段压扁),竖排给 maxH(超出则换列)。
@@ -192,8 +192,8 @@ export function verticalColumns(
 /**
  * 竖排:逐字沿 y 堆叠,一列排满可用高度后换列,整块的水平中心落在 x、垂直中心落在 y。
  *
- * 换列方向取「自右向左」:中文竖排的行序是自上而下、自右向左,首列贴在整个列阵的最右,
- * 后续各列依次向左展开(横排的从左到右,在竖排里对应的就是从上到下)。
+ * 换列方向取「自左向右」:首列贴在整个列阵的最左,后续各列依次向右展开。
+ * 这是用户实机裁定——插件面向的排版场景里,自左向右更好读,也与横排的从左到右一致。
  * 整块以锚点为心:列阵在 x 上左右对称、各列齐头(顶端对齐),最高的一列在 y 上居中。
  * 单列时列心正好等于 x、列内也不偏移,因此「一列放得下」的输出仍与历史版本逐字节一致。
  *
@@ -211,8 +211,8 @@ function layoutVertical(
   const count = columns.length
   const tallest = Math.max(...columns.map((c) => c.length))
   const startY = y - (step * (tallest - 1)) / 2
-  // 列心:第 0 列(整段开头)在最右,越靠后的列越往左
-  const centerX = (i: number) => x + ((count - 1) / 2 - i) * colStep
+  // 列心:第 0 列(整段开头)在最左,越靠后的列越往右(用户裁定:竖排换列自左向右)
+  const centerX = (i: number) => x + (i - (count - 1) / 2) * colStep
   if (font) {
     let d = ''
     columns.forEach((col, c) => {

@@ -1530,5 +1530,52 @@ describe('CoverWorkbench', () => {
         wrapper.unmount()
       })
     })
+
+    describe('旋转角度磁力', () => {
+      const rotationValue = (wrapper: VueWrapper) =>
+        (wrapper.find('input[aria-label="旋转(数值)"]').element as HTMLInputElement).value
+
+      it('拖旋转手柄吸附到 45° 的整数倍:面板角度随之为磁力点', async () => {
+        const { wrapper, canvas } = await mountStage()
+        await builtinRow(wrapper, '标题').trigger('click')
+        const ax = canvas.width * 0.5
+        const ay = canvas.height * 0.5
+        const at = (angle: number) => ({
+          clientX: ax + 100 * Math.cos((angle * Math.PI) / 180),
+          clientY: ay + 100 * Math.sin((angle * Math.PI) / 180),
+        })
+
+        pointerOn(wrapper.find('.handle-rotate').element, 'pointerdown', at(0))
+        await nextTick()
+        pointer(wrapper, 'pointermove', at(87)) // 距 90° 只有 3° ⇒ 吸住
+        await nextTick()
+        expect(rotationValue(wrapper)).toBe('90')
+
+        pointer(wrapper, 'pointermove', at(112)) // 离磁力点远 ⇒ 保持连续角度
+        await nextTick()
+        expect(rotationValue(wrapper)).toBe('112')
+
+        pointer(wrapper, 'pointerup')
+        wrapper.unmount()
+      })
+
+      it('磁力只作用于手柄:面板「旋转」滑杆与方向键微调都不被改写', async () => {
+        const { wrapper } = await mountStage()
+        await builtinRow(wrapper, '标题').trigger('click')
+
+        // 面板写 50°：不是 45 的倍数，滑杆走自己的写入路径，不该被磁力改成 45
+        await wrapper.find('input[aria-label="旋转(数值)"]').setValue('50')
+        await wrapper.find('input[aria-label="旋转(数值)"]').trigger('change')
+        await nextTick()
+        expect(rotationValue(wrapper)).toBe('50')
+
+        // 方向键只改位置，同样不碰旋转
+        await wrapper.find('.stage-col').trigger('keydown', { key: 'ArrowRight', shiftKey: true })
+        await nextTick()
+        expect(rotationValue(wrapper)).toBe('50')
+        expect(anchorsOf(wrapper, '标题')[0]).toBe(51)
+        wrapper.unmount()
+      })
+    })
   })
 })

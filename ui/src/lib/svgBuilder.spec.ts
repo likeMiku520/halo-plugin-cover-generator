@@ -591,8 +591,8 @@ describe('buildCoverSvg 竖排换列', () => {
       font: null, defaultLogoDataUrl: '',
     })
     // 可用高度 = 630 × 0.9333 ≈ 588、步进 = 字号 210 ⇒ 每列 2 字,六个字排 3 列;
-    // 列距 = 210、整块以锚点 x = 600 为心 ⇒ 列心 810 / 600 / 390(自右向左)
-    expect(xsIn(svg)).toEqual([810, 810, 600, 600, 390, 390])
+    // 列距 = 210、整块以锚点 x = 600 为心 ⇒ 列心 390 / 600 / 810(自左向右)
+    expect(xsIn(svg)).toEqual([390, 390, 600, 600, 810, 810])
   })
 
   it('竖排标题一列放得下时不换列:列心仍是锚点', () => {
@@ -615,8 +615,8 @@ describe('buildCoverSvg 竖排换列', () => {
       }),
       font: null, defaultLogoDataUrl: '',
     })
-    // 两列各两个字:首列在右(705)、次列在左(495)
-    expect(xsIn(svg)).toEqual([705, 705, 495, 495])
+    // 两列各两个字:首列在左(495)、次列在右(705)
+    expect(xsIn(svg)).toEqual([495, 495, 705, 705])
   })
 
   it('竖排副标题超出可用高度后换列', () => {
@@ -634,8 +634,8 @@ describe('buildCoverSvg 竖排换列', () => {
     // 字号 = 34 × 0.5 = 17、字距 0.3 ⇒ 步进 22.1;预算 = 630 × 0.9333 × 0.5 ≈ 294 ⇒ 每列 13 字
     expect(xs).toHaveLength(30)
     expect(new Set(xs).size).toBe(3)
-    expect(xs[0]).toBeCloseTo(622.1, 2)
-    expect(xs[xs.length - 1]).toBeCloseTo(577.9, 2)
+    expect(xs[0]).toBeCloseTo(577.9, 2)
+    expect(xs[xs.length - 1]).toBeCloseTo(622.1, 2)
   })
 
   it('竖排水印超出可用高度后换列,且朝画布内侧展开', () => {
@@ -652,8 +652,8 @@ describe('buildCoverSvg 竖排换列', () => {
     const xs = xsIn(innerOf(svg, '<g opacity="0.65">'))
     // 字号 26、字距 0.08 ⇒ 步进 28.08;预算 = 630 × 0.35 ≈ 220 ⇒ 每列 7 字,20 字排 3 列
     expect(new Set(xs).size).toBe(3)
-    expect(xs[0]).toBeCloseTo(1168.08, 2)
-    // 自右向左展开:后续列朝画布内侧走,不会因为换列而探出右缘
+    expect(xs[0]).toBeCloseTo(1111.92, 2)
+    // 自左向右展开:首列在最左,后续列继续朝右;水印锚点 x=1140、列距 28.08 ⇒ 末列 1168.08,仍在画布内
     for (const x of xs) expect(x).toBeLessThanOrEqual(CANVAS.width)
   })
 
@@ -670,11 +670,11 @@ describe('buildCoverSvg 竖排换列', () => {
       }),
       font: null, defaultLogoDataUrl: '',
     })
-    // 字号 40、步进 40;预算 = 630 × 0.75 ≈ 472 ⇒ 每列 11 字,30 字排 3 列,列心 640 / 600 / 560
+    // 字号 40、步进 40;预算 = 630 × 0.75 ≈ 472 ⇒ 每列 11 字,30 字排 3 列,列心 560 / 600 / 640
     expect(xsIn(innerOf(svg, '<g>'))).toEqual([
-      640, 640, 640, 640, 640, 640, 640, 640, 640, 640, 640,
+      560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560,
       600, 600, 600, 600, 600, 600, 600, 600, 600, 600, 600,
-      560, 560, 560, 560, 560, 560, 560, 560,
+      640, 640, 640, 640, 640, 640, 640, 640,
     ])
   })
 

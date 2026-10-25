@@ -247,6 +247,48 @@ function angleOf(point: CanvasPoint, center: CanvasPoint, canvas: CanvasSize): n
   return (Math.atan2(dy, dx) * 180) / Math.PI
 }
 
+/**
+ * 旋转磁力点：45° 的整数倍。
+ *
+ * 为什么是 45°：版式里真正会用到的朝向就这八个——水平与垂直（0、±90、±180）
+ * 加上两条对角线（±45、±135）。再细的刻度（15°）没有版式语义，
+ * 却会让自由旋转处处被吸住；±180 与 0 是同一朝向，表里两个边界都留着，
+ * 因为 normalizeRotation 的夹取域就是 ±180。
+ */
+export const ROTATION_MAGNETS = [-180, -135, -90, -45, 0, 45, 90, 135, 180] as const
+
+/**
+ * 旋转吸附阈值（度）。
+ *
+ * 取 5°：相邻磁力点相隔 45°，于是每段留出 35° 的自由行程——既能明显感到「吸住」，
+ * 又不会粘住转不动。再小（2°）几乎感觉不到吸力，再大（10°）就得跟它较劲。
+ */
+export const ROTATION_SNAP_DEG = 5
+
+/**
+ * 阈值比较的浮点余量（度）：角度由像素 atan2 得来，数学上恰好等于阈值的落点
+ * 会因为 1e-14 的误差时灵时不灵。1e-9 度在 100px 半径上不到百万分之一像素。
+ */
+const ROTATION_SNAP_EPSILON = 1e-9
+
+/**
+ * 把角度吸到最近的磁力点；不在阈值内则原样返回（保持连续可转）。
+ * 阈值取闭区间，与参考线的吸附语义一致：正好 5° 也算吸住。
+ */
+function snapRotation(deg: number): number {
+  let best = deg
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (const magnet of ROTATION_MAGNETS) {
+    const distance = Math.abs(magnet - deg)
+    if (distance > ROTATION_SNAP_DEG + ROTATION_SNAP_EPSILON) continue
+    if (distance < bestDistance) {
+      bestDistance = distance
+      best = magnet
+    }
+  }
+  return best
+}
+
 /** 滚轮一格（约 100px）约 2%：再大就跳格，再小则长滚也不动 */
 const WHEEL_PERCENT_PER_PIXEL = 0.02
 /** 行模式(deltaMode=1)与页模式(2)折算成像素：各家浏览器给出的单位差异极大 */
@@ -396,8 +438,9 @@ export function useCanvasDrag() {
     const r = rotateSession
     if (!r) return null
     const delta = angleOf(point, r.center, canvas) - r.startAngle
-    // 收敛交给 normalizeRotation：面板滑杆与旋转手柄共用同一套 ±180 边界
-    return { id: r.id, rotation: normalizeRotation(r.origin.rotation + delta) }
+    // 磁力只在这里生效：面板的「旋转」滑杆与方向键微调走各自的写入路径，不经过旋转会话。
+    // 先吸磁力点再收敛：±180 的夹取语义保持不变（越过 180° 仍停在 180°，不环绕）
+    return { id: r.id, rotation: normalizeRotation(snapRotation(r.origin.rotation + delta)) }
   }
 
   /** 进入拉大：记下按下点到锚点的距离，之后每一步按距离比缩放 */

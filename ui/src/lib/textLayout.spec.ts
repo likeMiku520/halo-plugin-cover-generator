@@ -127,11 +127,11 @@ describe('layoutRun 竖排换列', () => {
     expect(glyphs.filter((g) => g.x === glyphs[0].x)).toHaveLength(2)
   })
 
-  it('换列方向自右向左:整段开头的一列落在最右', () => {
+  it('换列方向自左向右:整段开头的一列落在最左', () => {
     const glyphs = glyphsOf(run('abcdef', { font: null, layout: VERTICAL, maxH: 80 }))
-    // 输出按列序(即阅读序)生成:第 1 列最右,越往后的列越靠左
-    expect(glyphs[0].x).toBeGreaterThan(glyphs[2].x)
-    expect(glyphs[2].x).toBeGreaterThan(glyphs[4].x)
+    // 输出按列序(即阅读序)生成:第 1 列最左,越往后的列越靠右
+    expect(glyphs[0].x).toBeLessThan(glyphs[2].x)
+    expect(glyphs[2].x).toBeLessThan(glyphs[4].x)
   })
 
   it('整块以锚点为心:列阵左右对称、各列齐头', () => {
@@ -157,7 +157,7 @@ describe('layoutRun 竖排换列', () => {
   it('文本里的换行按强制换列处理(竖排里换行与换列是同一件事)', () => {
     const glyphs = glyphsOf(run('ab\ncd', { font: null, layout: VERTICAL }))
     // 不限高也是两列:ab 在右、cd 在左,各自从同一个顶端起排
-    expect(glyphs.map((g) => g.x)).toEqual([120, 120, 80, 80])
+    expect(glyphs.map((g) => g.x)).toEqual([80, 80, 120, 120])
     expect(new Set(glyphs.map((g) => g.y)).size).toBe(2)
   })
 

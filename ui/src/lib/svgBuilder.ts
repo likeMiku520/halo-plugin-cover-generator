@@ -280,6 +280,30 @@ export function wrapText(
   return lines.filter((l, i, arr) => l !== '' || (i > 0 && i < arr.length - 1))
 }
 
+/** 竖排换行预算要区分元素:四类文字各有自己的留白比例 */
+export type VerticalBudgetTarget = 'title' | 'subtitle' | 'watermark' | 'custom'
+
+/**
+ * 竖排换列的可用高度(px):与横排可用宽度同一条规则——画布比例 × 元素倍率,只是换到纵轴。
+ *
+ * 比例沿用各元素横排那几个常量(整块/水印/自定义文字的占画布比例),两种方向的留白松紧因此一致:
+ * 横排放不下就压缩、竖排放不下就换列,「放不下」的判断边界落在同一个位置。
+ * 副标题横排要让位给两侧装饰线,竖排不画装饰线(横线会横穿列身),故直接按整块比例取高度。
+ *
+ * 渲染层与命中几何共用本函数:两处各算一遍的话,选中框会和换列后的图元脱节
+ * (这正是横排当初踩过的坑)。
+ */
+export function verticalTextMaxHeight(
+  target: VerticalBudgetTarget, ctx: Ctx, scale: number,
+): number {
+  const fraction = target === 'watermark'
+    ? CANVAS.WM_MAX_FRACTION
+    : target === 'custom'
+      ? CANVAS.CUSTOM_TEXT_MAX_FRACTION
+      : CANVAS.FULL_MAX_FRACTION
+  return ctx.H * fraction * scale
+}
+
 /**
  * 标题层。
  *
@@ -309,9 +333,11 @@ function titleLayer(
   const ts = textStyleOf(state, 'title')
   const layout: RunLayout = { curve: ts.curve, direction: ts.direction }
   const vertical = ts.direction === 'vertical'
-  // 竖排沿纵向堆叠,横向宽度预算不再适用:置 0 表示不压缩,列高由字号决定
-  const budget = vertical ? 0 : maxW
   const trackOf = (fs: number) => fs * ts.tracking
+  // 两个方向各只有一个预算量起作用:竖排读可用高度(一列排满就换列),横排读可用宽度(放不下就压缩)。
+  // 用不上的那一轴置 0,表示「不限」——排版引擎因此不必知道画布尺寸,这里也不必写两套分支。
+  const budgetW = vertical ? 0 : maxW
+  const budgetH = vertical ? verticalTextMaxHeight('title', ctx, ax.scale) : 0
   /** 收尾:先加投影,再绕锚点整体旋转 */
   const finish = (inner: string) => withOpacity(
     rotateAbout(wrap(inner), ax.rotation, cx, baseline), ax.opacity,
@@ -325,21 +351,22 @@ function titleLayer(
     const phSize = byHeight(160, ctx.s)
     const ph = layoutRun(
       font, '标题标题', cx, baseline, phSize, trackOf(phSize),
-      ts.color, 'middle', ts.bold, budget, layout,
+      ts.color, 'middle', ts.bold, budgetW, budgetH, layout,
     )
     return finish(`<g opacity="0.4">${ph}</g>`)
   }
 
   if (state.titleMode === 'flow') {
-    // 竖排不做横向断行:每行都会变成一列,断行只会得到一排并列的短列
-    const lines = vertical ? flow.split('\n') : wrapText(flow, maxW, base, measure)
+    // 竖排不做横向断行:整段交给排版引擎按可用高度换列(按宽度断行只会得到一排并列的短列),
+    // 文本里的 \n 在那里就是强制换列;横排仍按宽度断行后逐行居中排布
+    const lines = vertical ? [flow] : wrapText(flow, maxW, base, measure)
     const lineHeight = Math.round(base * 1.18)
     // 整块以锚点为竖直中心：行数增加时向上向下对称展开
     const firstBaseline = baseline - ((lines.length - 1) * lineHeight) / 2
     const rendered = lines
       .map((line, i) => layoutRun(
         font, line, cx, firstBaseline + i * lineHeight, base, trackOf(base),
-        ts.color, 'middle', ts.bold, budget, layout,
+        ts.color, 'middle', ts.bold, budgetW, budgetH, layout,
       ))
       .join('')
     return finish(rendered)
@@ -353,7 +380,7 @@ function titleLayer(
       : fitFontSize(joined, maxW, { base, min: minSize }, measure)
     return finish(layoutRun(
       font, joined, cx, baseline, fontSize, trackOf(fontSize),
-      ts.color, 'middle', ts.bold, budget, layout,
+      ts.color, 'middle', ts.bold, budgetW, budgetH, layout,
     ))
   }
 
@@ -375,7 +402,7 @@ function titleLayer(
     ? (factors[0] ?? 1)
     : Math.sqrt(factors.reduce((a, b) => a * b, 1))
   const clamped = Math.min(1, Math.max(minSizeScale, shared))
-  // 竖排两段各成一列,列宽与段宽无关:不参与那套横向缩放
+  // 竖排两段各成一列阵,列宽与段宽无关:不参与那套横向缩放
   const size = vertical ? base : Math.max(minSize, Math.round(base * clamped))
   // 字号被下限截住后，剩余比例转为水平压缩，两段因此仍严格不超单侧可用宽度
   const compress = vertical ? 1 : (clamped > 0 ? clamped / (size / base) : 1)
@@ -383,11 +410,11 @@ function titleLayer(
   const half = byWidth(state.seamGap, ctx.s) / 2
   const leftText = left
     ? layoutRun(font, left, cx - half, baseline, size, trackOf(size),
-        ts.color, 'end', ts.bold, segBudget, layout, compress)
+        ts.color, 'end', ts.bold, segBudget, budgetH, layout, compress)
     : ''
   const rightText = right
     ? layoutRun(font, right, cx + half, baseline, size, trackOf(size),
-        ts.color, 'start', ts.bold, segBudget, layout, compress)
+        ts.color, 'start', ts.bold, segBudget, budgetH, layout, compress)
     : ''
   return finish(leftText + rightText)
 }
@@ -489,8 +516,10 @@ function subTitleLayer(
   const vertical = ts.direction === 'vertical'
   const lineW = byWidth(CANVAS.SUB_LINE_W, ctx.s)
   const lineGap = byWidth(CANVAS.SUB_LINE_GAP, ctx.s)
-  // 两侧装饰线占位后，文字实际可用宽度收窄；竖排是单列，不需要为侧线让位
+  // 两侧装饰线占位后，文字实际可用宽度收窄；竖排是单列阵，不需要为侧线让位
   const textMax = vertical ? 0 : (fullMaxWidth(ctx) - 2 * (lineW + lineGap)) * ax.scale
+  // 竖排改按可用高度换列:预算与横排同一比例,只是换到纵轴(装饰线在竖排里不画,故不必为它们收窄)
+  const textMaxH = vertical ? verticalTextMaxHeight('subtitle', ctx, ax.scale) : 0
   const trackPxOf = (sz: number) => sz * ts.tracking
   const mTracked = (t: string, sz: number) => measureTracked(measure, t, sz, trackPxOf(sz))
   // 大小倍率必须作用到字号本身:此前只用它缩窄了可用宽度,滑杆拖到底字号也不变
@@ -502,7 +531,7 @@ function subTitleLayer(
     ? { fontSize: subBase }
     : fitFontSize(sub, textMax, { base: subBase, min: subMin }, mTracked)
   const text = layoutRun(font, sub, cx, baseline, fontSize, trackPxOf(fontSize),
-    ts.color, 'middle', ts.bold, textMax, layout)
+    ts.color, 'middle', ts.bold, textMax, textMaxH, layout)
   // 装饰线只在横排出现：竖排是一列字，两侧横线会横穿列身
   const sideLines = vertical ? '' : (() => {
     // 被压缩时装饰线必须贴压缩后的实际宽，否则跑出画布
@@ -555,10 +584,11 @@ function watermarkLayer(
   const layout: RunLayout = { curve: ts.curve, direction: ts.direction }
   const size = Math.max(12, Math.round(byHeight(CANVAS.WM_SIZE, ctx.s) * ax.scale))
   const trackPx = size * ts.tracking
-  // 竖排按纵向堆叠，横向宽度预算不适用
+  // 竖排沿纵向堆叠，横向宽度预算不适用；改按可用高度换列
   const maxW = ts.direction === 'vertical' ? 0 : watermarkMaxWidth(ctx) * ax.scale
+  const maxH = ts.direction === 'vertical' ? verticalTextMaxHeight('watermark', ctx, ax.scale) : 0
   const text = layoutRun(font, wm, x, y, size, trackPx,
-    ts.color, ALIGN.watermark, ts.bold, maxW, layout)
+    ts.color, ALIGN.watermark, ts.bold, maxW, maxH, layout)
   return withOpacity(
     rotateAbout(`<g opacity="0.65">${text}</g>`, ax.rotation, x, y),
     ax.opacity,
@@ -583,15 +613,17 @@ function customElementLayer(
     const size = customElementSize(el, ctx)
     const trackPx = size * el.tracking
     const vertical = el.direction === 'vertical'
-    // 竖排不做横向断行：每行都会变成一列，断行只会得到一排并列的短列（与标题同一条规则）
+    // 竖排不做横向断行——整段交给排版引擎按可用高度换列(每行都会变成一列,
+    // 按宽度断行只会得到一排并列的短列);横排仍按宽度断行后逐行居中排布
     const maxW = vertical ? 0 : customTextMaxWidth(ctx) * a.scale
-    const lines = vertical ? text.split('\n') : wrapText(text, maxW, size, measure, trackPx)
+    const maxH = vertical ? verticalTextMaxHeight('custom', ctx, a.scale) : 0
+    const lines = vertical ? [text] : wrapText(text, maxW, size, measure, trackPx)
     const lineHeight = Math.round(size * 1.18)
     const firstBaseline = y - ((lines.length - 1) * lineHeight) / 2
     const body = lines
       .map((line, i) => layoutRun(
         font, line, x, firstBaseline + i * lineHeight, size, trackPx,
-        el.color, 'middle', el.bold, maxW, { curve: el.curve, direction: el.direction },
+        el.color, 'middle', el.bold, maxW, maxH, { curve: el.curve, direction: el.direction },
       ))
       .join('')
     return withOpacity(rotateAbout(`<g>${body}</g>`, a.rotation, x, y), a.opacity)

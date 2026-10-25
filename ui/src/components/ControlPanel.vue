@@ -6,7 +6,7 @@ import type { SelectionId } from '../composables/useCanvasInteraction'
 import type { FontLike } from '../lib/svgBuilder'
 import { CANVAS_PRESETS, CUSTOM_CANVAS_PRESET, describeCanvas, presetOfId } from '../lib/canvasPresets'
 import { CANVAS, CANVAS_SIDE_MAX, CANVAS_SIDE_MIN } from '../lib/layout'
-import { validateLogoUrl, fetchLogoAsDataUrl } from '../lib/logoFetcher'
+import { fetchLogoAsDataUrl } from '../lib/logoFetcher'
 import GradientPicker from './GradientPicker.vue'
 import ElementsPanel from './ElementsPanel.vue'
 import SliderField from './SliderField.vue'
@@ -32,10 +32,7 @@ const emit = defineEmits<{
   (e: 'select', id: SelectionId | null): void
 }>()
 
-const fileInput = ref<HTMLInputElement>()
 const uploadError = ref('')
-const logoUrlInput = ref('')
-const importing = ref(false)
 /** 代理兜底披露(评审 M3):本次导入走了公共代理时置位,界面明示第三方外发 */
 const proxyNotice = ref(false)
 
@@ -77,54 +74,6 @@ function setCustomCanvas(which: 'width' | 'height', raw: number) {
     canvas: { ...props.modelValue.canvas, [which]: v },
     canvasPresetId: CUSTOM_CANVAS_PRESET.id,
   })
-}
-
-function onFile(e: Event) {
-  const input = e.target as HTMLInputElement
-  const f = input.files?.[0]
-  input.value = '' // 重置选择器:被拒后可重选同一文件再次触发 change
-  if (!f) return
-  if (!f.type.startsWith('image/')) {
-    uploadError.value = '仅支持图片文件'
-    return
-  }
-  if (f.size > 2 * 1024 * 1024) {
-    uploadError.value = '图片不能超过 2 MB'
-    return
-  }
-  const reader = new FileReader()
-  reader.onload = () => {
-    set({ logoDataUrl: String(reader.result) })
-    uploadError.value = ''
-  }
-  // 读取失败(文件被删/占用/磁盘错误)必须显式反馈,与「静默失败显式化」原则一致(评审M7)
-  reader.onerror = () => {
-    uploadError.value = '图片读取失败，请重试'
-  }
-  reader.readAsDataURL(f)
-}
-
-async function importFromUrl() {
-  if (importing.value) return // 防重入:导入进行中忽略 Enter 与重复点击
-  const invalid = validateLogoUrl(logoUrlInput.value)
-  if (invalid) {
-    uploadError.value = invalid
-    return
-  }
-  importing.value = true
-  uploadError.value = ''
-  proxyNotice.value = false
-  try {
-    const dataUrl = await fetchLogoAsDataUrl(logoUrlInput.value.trim(), () => {
-      proxyNotice.value = true
-    })
-    set({ logoDataUrl: dataUrl })
-    uploadError.value = ''
-  } catch (e) {
-    uploadError.value = e instanceof Error ? e.message : '导入失败'
-  } finally {
-    importing.value = false
-  }
 }
 
 const backgroundBusy = ref(false)
@@ -184,20 +133,6 @@ async function onPickAttachment(value: unknown) {
   }
 }
 
-/** 当前生效 Logo(缩略图展示与预览同源:自定义优先,回退内置默认) */
-function currentLogoSrc() {
-  return props.modelValue.logoDataUrl || props.defaultLogoUrl || ''
-}
-
-/** 媒体字段文案:按「自定义 / 内置默认 / 空」三态给主副文案 */
-const mediaMain = computed(() =>
-  props.modelValue.logoDataUrl || props.defaultLogoUrl ? '替换图片' : '上传图片',
-)
-const mediaSub = computed(() => {
-  if (props.modelValue.logoDataUrl) return '当前为自定义 Logo'
-  if (props.defaultLogoUrl) return '当前为内置默认 Logo'
-  return 'PNG / JPG / SVG,≤ 2 MB'
-})
 </script>
 
 <template>
@@ -432,50 +367,9 @@ const mediaSub = computed(() => {
         ></button>
       </div>
 
-      <!-- 上传:整行可点击的媒体字段(复用 sd-field 外壳;div 仅键盘聚焦出环) -->
-      <div
-        class="media-field sd-field"
-        role="button"
-        tabindex="0"
-        aria-label="上传或替换 Logo 图片"
-        @click="fileInput?.click()"
-        @keydown.enter.prevent="fileInput?.click()"
-        @keydown.space.prevent="fileInput?.click()"
-      >
-        <input ref="fileInput" type="file" accept="image/*" hidden @change="onFile" />
-        <span
-          class="logo-thumb"
-          :style="currentLogoSrc() ? { backgroundImage: `url(${currentLogoSrc()})` } : undefined"
-        >
-          <span v-if="!currentLogoSrc()" class="logo-mark" aria-hidden="true"></span>
-        </span>
-        <span class="media-text">
-          <b>{{ mediaMain }}</b>
-          <small>{{ mediaSub }}</small>
-        </span>
-        <span class="media-go" aria-hidden="true">
-          <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-            <path d="M7 9.6V2.6M4.4 5.2 7 2.6l2.6 2.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-            <path d="M2.4 9.8v1a1.4 1.4 0 0 0 1.4 1.4h6.4a1.4 1.4 0 0 0 1.4-1.4v-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-          </svg>
-          浏览
-        </span>
-      </div>
-      <!-- 链接导入:常驻输入框,不藏在文字链后面 -->
-      <div class="url-label">从图片链接导入</div>
-      <div class="row2 url-row">
-        <input
-          v-model="logoUrlInput"
-          class="sd-field sd-field--mono"
-          placeholder="粘贴图床直链 https://…"
-          aria-label="Logo 图片链接"
-          @keydown.enter="importFromUrl"
-        />
-        <button type="button" class="sd-btn-quiet" :disabled="importing" @click="importFromUrl">
-          {{ importing ? '导入中…' : '导入' }}
-        </button>
-      </div>
-      <!-- 附件库:站内已上传的图直接选,不必先下载再本地上传(Halo 自带三合一) -->
+      <!-- 图片来源只保留 Halo 自带三合一(上传 / 附件库 / 输入链接):
+           插件自绘的上传字段与「从图片链接导入」做的是同一件事的第二、第三个入口,
+           三处并存时用户得先判断该用哪个,入口本身反而成了负担 -->
       <div class="picker-slot">
         <FormKit type="attachment" :accepts="['image/*']" @input="onPickAttachment" />
       </div>
@@ -777,70 +671,6 @@ const mediaSub = computed(() => {
 }
 .logo-head .spacer { flex: 1; }
 
-/* 媒体字段:整行可点击(sd-field 外壳走共享类),此处只管布局 */
-.media-field {
-  display: flex;
-  align-items: center;
-  gap: var(--pit-sp-3);
-  cursor: pointer;
-}
-.logo-thumb {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--sd-r-small);
-  background-color: var(--sd-surface-panel);
-  background-size: cover;
-  background-position: center;
-  box-shadow: 0 0 0 1px var(--sd-line) inset;
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-}
-.logo-mark {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--sd-accent);
-  opacity: 0.85;
-}
-.media-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  text-align: left;
-}
-.media-text b {
-  font-size: var(--sd-fs-md);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-.media-text small {
-  font-size: var(--sd-fs-sm);
-  color: var(--sd-text-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.media-go {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--sd-fs-md);
-  font-weight: 600;
-  color: var(--sd-text-accent);
-  flex: 0 0 auto;
-}
-
-/* 链接导入:常驻输入行,标签与渐变卡分组标题同规格 */
-.url-label {
-  margin: var(--pit-sp-3) 0 var(--pit-sp-1);
-  font-size: var(--sd-fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--sd-text-2);
-}
 .switch {
   width: 40px;
   height: 24px;

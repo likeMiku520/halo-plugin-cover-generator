@@ -588,6 +588,16 @@ describe('CoverWorkbench', () => {
     }
   }
 
+  /**
+   * 经 Halo 附件选择器导入 Logo。
+   * 图片来源已收敛为 Halo 自带的那一个入口，插件自绘的上传字段不再存在；
+   * FormKit 替身只保留「接住回填值」这一条契约，所以用 $emit('input', 值) 驱动。
+   */
+  function pickLogo(wrapper: ReturnType<typeof mount>, url: string) {
+    const card = wrapper.findAll('section.card').find((s) => s.text().includes('Logo'))!
+    card.findComponent({ name: 'FormKit' }).vm.$emit('input', url)
+  }
+
   /** 经 PostPicker 选中第 index 篇检索结果(真实 300ms 防抖,轮询等待下拉出现) */
   async function pickFirstPost(
     wrapper: Awaited<ReturnType<typeof mountExportable>>,
@@ -601,32 +611,27 @@ describe('CoverWorkbench', () => {
   }
 
   it('默认 Logo 拉取失败但用户已导入自己的 Logo 时不强行隐藏(rider 对称性)', async () => {
-    mockedGet.mockResolvedValue(configMapResponse({ logoUrl: 'https://cdn.example.com/logo.png' }))
-    // 受控 deferred:让默认 Logo 拉取挂在用户导入之后才失败
-    let rejectFetch!: (e: unknown) => void
+    const DEFAULT_LOGO = 'https://cdn.example.com/logo.png'
+    mockedGet.mockResolvedValue(configMapResponse({ logoUrl: DEFAULT_LOGO }))
+    // 默认 Logo 的抓取挂在半空(等用户导入后再失败);用户自己那张则正常成功
+    let rejectDefault!: (e: unknown) => void
     vi.stubGlobal(
       'fetch',
-      vi.fn(
-        () =>
-          new Promise<{ ok: boolean }>((_ok, rej) => {
-            rejectFetch = rej
-          }),
-      ),
+      vi.fn((input: unknown) =>
+        input === DEFAULT_LOGO
+          ? new Promise<{ ok: boolean }>((_ok, rej) => { rejectDefault = rej })
+          : Promise.resolve({ ok: true, status: 200, blob: async () => new Blob(['abc'], { type: 'image/png' }) })),
     )
     const wrapper = mount(CoverWorkbench)
     await flushPromises()
 
-    // 用户经「本地上传」导入自己的 Logo(jsdom FileReader 异步派发 load)
-    const fileInput = wrapper.find('input[type="file"]')
-    Object.defineProperty(fileInput.element, 'files', {
-      value: [new File(['img'], 'mine.png', { type: 'image/png' })],
-    })
-    await fileInput.trigger('change')
+    // 用户经 Halo 附件选择器导入自己的 Logo(图片来源三处已收敛为这一个入口)
+    pickLogo(wrapper, 'https://cdn.example.com/mine.png')
     await until(() => wrapper.text().includes('恢复默认'))
     expect(wrapper.text()).toContain('恢复默认') // 用户 Logo 已就位
 
     // 此刻默认 Logo 拉取才失败:不得强行隐藏用户的 Logo
-    rejectFetch(new TypeError('network down'))
+    rejectDefault(new TypeError('network down'))
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
     await flushPromises()
 
@@ -754,8 +759,9 @@ describe('CoverWorkbench', () => {
 
     expect((wrapper.find('input[aria-label="标题左段"]').element as HTMLInputElement).value).toBe('来自')
     expect((wrapper.find('input[aria-label="标题右段"]').element as HTMLInputElement).value).toBe('弹窗')
-    // 预设 id 命中渐变:sky(晴空)成为当前选中预设
-    expect(wrapper.find('.swatch.active').attributes('aria-label')).toBe('晴空')
+    // 预设 id 命中渐变:sky(晴空)成为当前样式,输出条摘要即显示它的名字
+    // (渐变预设的色块已并入 GradientPicker,断言改为读用户看得到的摘要文字)
+    expect(wrapper.text()).toContain('晴空')
     wrapper.unmount()
   })
 
@@ -903,7 +909,12 @@ describe('CoverWorkbench', () => {
       return {
         id: 'el-seed',
         kind,
-        content: kind === 'image' ? 'data:image/png;base64,AAAA' : '',
+        // svg 需要真实标记：面板与几何都要读它的 viewBox 才能算出「边长」
+        content: kind === 'image'
+          ? 'data:image/png;base64,AAAA'
+          : kind === 'svg'
+            ? '<svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>'
+            : '',
         text: kind === 'text' ? '自定义文字' : '',
         size: kind === 'text' ? 60 : 200,
         anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 },
@@ -948,6 +959,10 @@ describe('CoverWorkbench', () => {
     /** 自定义元素的位置回显(详情区滑杆,面板与状态同源) */
     const customX = (wrapper: VueWrapper) =>
       (wrapper.find('input[aria-label="水平(数值)"]').element as HTMLInputElement).value
+
+    /** 面板上自定义元素的大小回显：图片读「宽度」、SVG 读「边长」、文字读「大小(%)」 */
+    const customSizeOf = (wrapper: VueWrapper, label: string) =>
+      (wrapper.find(`input[aria-label="${label}(数值)"]`).element as HTMLInputElement).value
 
     /** 预览当前渲染的 SVG(防抖与否看它) */
     const previewSvg = (wrapper: VueWrapper) =>
@@ -1354,6 +1369,163 @@ describe('CoverWorkbench', () => {
 
         const rotationInput = wrapper.find('input[aria-label="旋转(数值)"]')
         expect((rotationInput.element as HTMLInputElement).value).toBe('90')
+        pointer(wrapper, 'pointerup')
+        wrapper.unmount()
+      })
+    })
+
+    /** 滚轮/拉大之后：面板回显与预览必须同时变（同一个量） */
+    describe('自定义图片/SVG 的大小 owner', () => {
+      for (const [kind, label] of [['svg', '边长'], ['image', '宽度']] as const) {
+        it(`滚轮改 ${kind} 大小:面板「${label}」与预览同步变化`, async () => {
+          seedCustomElement(kind)
+          const { wrapper } = await mountStage()
+          await wrapper.find('button.el-name').trigger('click')
+          expect(customSizeOf(wrapper, label)).toBe('200')
+          const before = previewSvg(wrapper)
+
+          wheel(wrapper, -100)
+          await nextTick()
+
+          // 面板显示值就是被写回的那个量（+2%），不再出现「画面变了、面板没变」
+          expect(customSizeOf(wrapper, label)).toBe('204')
+          expect(previewSvg(wrapper)).not.toBe(before)
+          // 倍率归位 1：面板的 px 与画面尺寸从此是同一个数
+          expect(wrapper.find('input[aria-label="水平(数值)"]').exists()).toBe(true)
+          wrapper.unmount()
+        })
+
+        it(`拉大手柄对 ${kind} 生效:往外拖变大、往回收变小(面板「${label}」跟着动)`, async () => {
+          seedCustomElement(kind)
+          const { wrapper, canvas } = await mountStage()
+          await wrapper.find('button.el-name').trigger('click')
+          // 距离一律相对元素锚点(自定义元素出厂在画布正中)量，比值才是干净整数
+          const ax = canvas.width * 0.5
+          const ay = canvas.height * 0.5
+
+          pointerOn(wrapper.find('.handle-scale').element, 'pointerdown', {
+            clientX: ax + 100, clientY: ay,
+          })
+          await nextTick()
+          pointer(wrapper, 'pointermove', { clientX: ax + 200, clientY: ay }) // 2×
+          await nextTick()
+          expect(customSizeOf(wrapper, label)).toBe('400') // 200 × 2
+
+          pointer(wrapper, 'pointermove', { clientX: ax + 100, clientY: ay }) // 回到起点距离 ⇒ 原大小
+          await nextTick()
+          expect(customSizeOf(wrapper, label)).toBe('200')
+          pointer(wrapper, 'pointerup')
+          wrapper.unmount()
+        })
+      }
+
+      it('自定义文字仍走「大小(%)」:它的 owner 就是 anchor.scale', async () => {
+        const base = defaultCoverState()
+        seedTitle(105, {
+          customElements: [customElementOf('text')],
+          layers: [...base.layers, 'custom:el-seed'],
+        })
+        const { wrapper } = await mountStage()
+        await wrapper.find('button.el-name').trigger('click')
+
+        wheel(wrapper, -100)
+        await nextTick()
+
+        expect(customSizeOf(wrapper, '大小')).toBe('102') // 100% → 102%
+        expect(wrapper.find('input[aria-label="边长(数值)"]').exists()).toBe(false)
+        wrapper.unmount()
+      })
+
+      it('拉大手柄对内置元素同样生效:标题按倍率折算成字号', async () => {
+        seedTitle(105)
+        const { wrapper, canvas } = await mountStage()
+        await builtinRow(wrapper, '标题').trigger('click')
+        const cx = canvas.width * 0.5
+        const cy = canvas.height * 0.5
+
+        pointerOn(wrapper.find('.handle-scale').element, 'pointerdown', {
+          clientX: cx + 100, clientY: cy,
+        })
+        await nextTick()
+        pointer(wrapper, 'pointermove', { clientX: cx + 200, clientY: cy }) // 2×
+        await nextTick()
+
+        expect(renderedTitleFontSize(wrapper)).toBe(210) // 105 × 2，夹在字号上限
+        expect(anchorsOf(wrapper, '标题')).toEqual([50, 50, 100]) // 倍率仍归位 1
+        pointer(wrapper, 'pointerup')
+        wrapper.unmount()
+      })
+
+      it('拉大手柄受元素各自的倍率上限约束', async () => {
+        seedArchive({ subtitle: '副标题' })
+        const { wrapper, canvas } = await mountStage()
+        await builtinRow(wrapper, '副标题').trigger('click')
+        // 副标题锚点在 80% 高度：距离要相对它量，比值才是整数
+        const ax = canvas.width * 0.5
+        const ay = canvas.height * 0.8
+
+        pointerOn(wrapper.find('.handle-scale').element, 'pointerdown', {
+          clientX: ax + 100, clientY: ay,
+        })
+        await nextTick()
+        pointer(wrapper, 'pointermove', { clientX: ax + 400, clientY: ay }) // 4× ⇒ 超上限
+        await nextTick()
+
+        expect(anchorsOf(wrapper, '副标题')[2]).toBe(100) // 副标题上限 100%
+        pointer(wrapper, 'pointerup')
+        wrapper.unmount()
+      })
+
+      it('一次拖到底:24px 的小图直接到 600px,600px 也能一次回到 24px', async () => {
+        // 手柄不再限幅比值，边界由写回路径按 owner 夹取（图片/SVG 是 24–600px）
+        seedTitle(105, {
+          customElements: [{ ...customElementOf('image'), size: 24 }],
+          layers: [...defaultCoverState().layers, 'custom:el-seed'],
+        })
+        const { wrapper, canvas } = await mountStage()
+        await wrapper.find('button.el-name').trigger('click')
+        const ax = canvas.width * 0.5
+        const ay = canvas.height * 0.5
+        expect(customSizeOf(wrapper, '宽度')).toBe('24')
+
+        pointerOn(wrapper.find('.handle-scale').element, 'pointerdown', {
+          clientX: ax + 40, clientY: ay,
+        })
+        await nextTick()
+        pointer(wrapper, 'pointermove', { clientX: ax + 1000, clientY: ay }) // 25× ⇒ 一次性到顶
+        await nextTick()
+        expect(customSizeOf(wrapper, '宽度')).toBe('600')
+        pointer(wrapper, 'pointerup')
+        await nextTick()
+
+        // 再从 600px 往回拖一次：一步到底，不在半路被夹住
+        pointerOn(wrapper.find('.handle-scale').element, 'pointerdown', {
+          clientX: ax + 1000, clientY: ay,
+        })
+        await nextTick()
+        pointer(wrapper, 'pointermove', { clientX: ax + 40, clientY: ay }) // 1/25
+        await nextTick()
+        expect(customSizeOf(wrapper, '宽度')).toBe('24')
+        pointer(wrapper, 'pointerup')
+        wrapper.unmount()
+      })
+
+      it('倍率 owner 的上限不变:Logo 一次拖到底停在 300%', async () => {
+        // Logo 要有图才有命中框，也就才有选中框与手柄
+        seedArchive({ logoDataUrl: 'data:image/png;base64,AAAA' })
+        const { wrapper, canvas } = await mountStage()
+        await builtinRow(wrapper, 'Logo').trigger('click')
+        const ax = canvas.width * 0.5
+        const ay = canvas.height * 0.5
+
+        pointerOn(wrapper.find('.handle-scale').element, 'pointerdown', {
+          clientX: ax + 40, clientY: ay,
+        })
+        await nextTick()
+        pointer(wrapper, 'pointermove', { clientX: ax + 1000, clientY: ay }) // 25× ⇒ 写回时夹到 300%
+        await nextTick()
+
+        expect(anchorsOf(wrapper, 'Logo')).toEqual([50, 50, 300])
         pointer(wrapper, 'pointerup')
         wrapper.unmount()
       })

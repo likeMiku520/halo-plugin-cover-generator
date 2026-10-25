@@ -35,7 +35,7 @@ async function until(cond: () => boolean, ms = 500) {
   }
 }
 
-describe('ControlPanel Logo 从链接导入(评审 M3 代理披露)', () => {
+describe('ControlPanel Logo 取图走附件选择器(评审 M3 代理披露)', () => {
   it('主源 CORS 失败走代理兜底时,界面明示链接已发送给第三方', async () => {
     const realPng = new Blob(['abc'], { type: 'image/png' })
     vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
@@ -43,16 +43,14 @@ describe('ControlPanel Logo 从链接导入(评审 M3 代理披露)', () => {
       return { ok: true, status: 200, blob: async () => realPng }
     }))
     const wrapper = mountPanel()
-    // 链接导入是常驻输入框(A2 打磨),直接录入
-    await wrapper.find('input[aria-label="Logo 图片链接"]').setValue('https://x.com/a.png')
-    await wrapper.findAll('button').find((b) => b.text() === '导入')!.trigger('click')
-    // 导入完成以 update:modelValue 上抛为准(FileReader 链路经多个宏任务)
+    // 图片来源只剩 Halo 自带三合一,回填的是附件 URL
+    wrapper.findComponent({ name: 'FormKit' }).vm.$emit('input', 'https://x.com/a.png')
     await until(() => (wrapper.emitted('update:modelValue')?.length ?? 0) > 0)
 
     expect(wrapper.find('.proxy-notice').exists()).toBe(true)
     expect(wrapper.find('.proxy-notice').text()).toContain('wsrv.nl')
     expect(wrapper.find('.proxy-notice').text()).toContain('第三方')
-    // 导入本身仍然成功:logoDataUrl 已上抛
+    // 取图本身仍然成功:logoDataUrl 已上抛
     const last = wrapper.emitted('update:modelValue')!.at(-1)![0] as CoverState
     expect(last.logoDataUrl).toMatch(/^data:image\/png;base64,/)
     wrapper.unmount()
@@ -63,8 +61,7 @@ describe('ControlPanel Logo 从链接导入(评审 M3 代理披露)', () => {
       ok: true, status: 200, blob: async () => new Blob(['abc'], { type: 'image/png' }),
     })))
     const wrapper = mountPanel()
-    await wrapper.find('input[aria-label="Logo 图片链接"]').setValue('https://x.com/a.png')
-    await wrapper.findAll('button').find((b) => b.text() === '导入')!.trigger('click')
+    wrapper.findComponent({ name: 'FormKit' }).vm.$emit('input', 'https://x.com/a.png')
     await until(() => (wrapper.emitted('update:modelValue')?.length ?? 0) > 0)
     await flushPromises()
 
@@ -102,18 +99,6 @@ describe('ControlPanel Logo 开关与恢复默认(A2)', () => {
     await wrapper2.findAll('button').find((b) => b.text() === '恢复默认')!.trigger('click')
     last = wrapper2.emitted('update:modelValue')!.at(-1)![0] as CoverState
     expect(last.logoHidden).toBe(true)
-    wrapper2.unmount()
-  })
-
-  it('缩略图展示当前生效 Logo(自定义优先,回退内置默认)', () => {
-    const wrapper = mountPanel({ ...baseState, logoDataUrl: 'data:image/png;base64,abc' })
-    const thumb = wrapper.find('.logo-thumb')
-    expect(thumb.attributes('style')).toContain('data:image/png;base64,abc')
-
-    const wrapper2 = mountPanel()
-    // 无自定义 Logo 时占位符出现,不展示任何外链
-    expect(wrapper2.find('.logo-thumb .logo-mark').exists()).toBe(true)
-    wrapper.unmount()
     wrapper2.unmount()
   })
 })

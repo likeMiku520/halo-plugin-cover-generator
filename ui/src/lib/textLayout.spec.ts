@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CURVE_MAX_SWEEP, STRAIGHT, estimateAdvance, layoutRun, measureTracked, runRenderedWidth,
+  verticalColumns, verticalStep,
 } from './textLayout'
 
 /** 固定步进的假字体:每字宽 0.5em、每字一条 M 命令,便于精确断言排布结果 */
@@ -12,11 +13,13 @@ const FONT = {
 const STRAIGHT_TEXT = { ...STRAIGHT }
 const run = (s: string, opts: {
   size?: number; track?: number; color?: string; anchor?: 'start' | 'middle' | 'end'
-  maxW?: number; layout?: typeof STRAIGHT; extraScale?: number; font?: typeof FONT | null
+  maxW?: number; maxH?: number; layout?: typeof STRAIGHT
+  extraScale?: number; font?: typeof FONT | null
 } = {}) => layoutRun(
   opts.font === undefined ? FONT : opts.font,
   s, 100, 200, opts.size ?? 40, opts.track ?? 0, opts.color ?? '#ffffff',
-  opts.anchor ?? 'middle', true, opts.maxW ?? 0, opts.layout ?? STRAIGHT_TEXT, opts.extraScale ?? 1,
+  opts.anchor ?? 'middle', true, opts.maxW ?? 0, opts.maxH ?? 0,
+  opts.layout ?? STRAIGHT_TEXT, opts.extraScale ?? 1,
 )
 
 /**
@@ -77,6 +80,152 @@ describe('layoutRun 竖排', () => {
     const out = run('abc', { font: null, layout: VERTICAL })
     expect(out.match(/<text /g)).toHaveLength(3)
     expect(out.match(/text-anchor="middle"/g)).toHaveLength(3)
+  })
+})
+
+/**
+ * 竖排的逐字位置。
+ *
+ * 走降级路径(无字体)时每个字就是一个 <text>,x 正是列心、y 是基线——
+ * 要精确断言换列位置就得从它读;有字体时整段合成一条 path,位置都编码进了 d,
+ * 那条路径的形状另有「逐字节一致」用例守着。
+ */
+const glyphsOf = (out: string) =>
+  [...out.matchAll(/<text x="([-\d.]+)" y="([-\d.]+)"/g)]
+    .map((m) => ({ x: Number(m[1]), y: Number(m[2]) }))
+
+/** 一列里出现过的列心(升序):竖排换列后同一列的字共享一个 x */
+const columnXs = (out: string) =>
+  [...new Set(glyphsOf(out).map((g) => g.x))].sort((a, b) => a - b)
+
+describe('layoutRun 竖排换列', () => {
+  const VERTICAL = { curve: 0, direction: 'vertical' as const }
+
+  it('一列放得下时输出与改动前逐字节一致', () => {
+    // 这条断言锁住的是历史输出:单列的坐标表达式没有变,换列只在「排不下」时才介入。
+    // 步进 = 40,三个字的基线为 160/200/240,字心水平居中在 x=100(字宽 20)
+    expect(run('abc', { layout: VERTICAL })).toBe(
+      '<path d="M90 160M90 200M90 240" fill="#ffffff" stroke="#ffffff" ' +
+      'stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>',
+    )
+  })
+
+  it('给了富余的高度预算也不改动单列结果(放得下就不换列)', () => {
+    expect(run('abc', { layout: VERTICAL, maxH: 1000 })).toBe(run('abc', { layout: VERTICAL }))
+    expect(run('abc', { layout: VERTICAL, maxH: 1000 })).toBe(
+      '<path d="M90 160M90 200M90 240" fill="#ffffff" stroke="#ffffff" ' +
+      'stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>',
+    )
+  })
+
+  it('一列排满可用高度后换列:列数增加、每列变短', () => {
+    // 步进 = 字号 40:预算 80 ⇒ 每列 2 字,六个字排成 3 列
+    const out = run('abcdef', { font: null, layout: VERTICAL, maxH: 80 })
+    const glyphs = glyphsOf(out)
+    expect(glyphs).toHaveLength(6)
+    expect(columnXs(out)).toHaveLength(3)
+    expect(glyphs.filter((g) => g.x === glyphs[0].x)).toHaveLength(2)
+  })
+
+  it('换列方向自右向左:整段开头的一列落在最右', () => {
+    const glyphs = glyphsOf(run('abcdef', { font: null, layout: VERTICAL, maxH: 80 }))
+    // 输出按列序(即阅读序)生成:第 1 列最右,越往后的列越靠左
+    expect(glyphs[0].x).toBeGreaterThan(glyphs[2].x)
+    expect(glyphs[2].x).toBeGreaterThan(glyphs[4].x)
+  })
+
+  it('整块以锚点为心:列阵左右对称、各列齐头', () => {
+    const out = run('abcdef', { font: null, layout: VERTICAL, maxH: 80 })
+    const glyphs = glyphsOf(out)
+    // 列距 = 字号 40 ⇒ 三列列心为 60 / 100 / 140,关于锚点 x=100 对称
+    expect(columnXs(out)).toEqual([60, 100, 140])
+    // 齐头(顶端对齐):每列的首字落在同一个 y 上,整块再以 y=200 竖直居中
+    const firstYs = columnXs(out).map((x) => glyphs.find((g) => g.x === x)!.y)
+    expect(new Set(firstYs).size).toBe(1)
+    expect(firstYs[0]).toBe(180)
+  })
+
+  it('列高不超过可用高度:容量按逐字步进取整', () => {
+    // 预算 100 / 步进 40 ⇒ 每列 2 字(3 字要 120,超预算)
+    const out = run('abcdefg', { font: null, layout: VERTICAL, maxH: 100 })
+    const glyphs = glyphsOf(out)
+    for (const x of columnXs(out)) {
+      expect(glyphs.filter((g) => g.x === x).length).toBeLessThanOrEqual(2)
+    }
+  })
+
+  it('文本里的换行按强制换列处理(竖排里换行与换列是同一件事)', () => {
+    const glyphs = glyphsOf(run('ab\ncd', { font: null, layout: VERTICAL }))
+    // 不限高也是两列:ab 在右、cd 在左,各自从同一个顶端起排
+    expect(glyphs.map((g) => g.x)).toEqual([120, 120, 80, 80])
+    expect(new Set(glyphs.map((g) => g.y)).size).toBe(2)
+  })
+
+  it('负字距只收紧列内步进,不把两列挤到重叠', () => {
+    // 步进 = 40 - 10 = 30 ⇒ 预算 90 每列 3 字;列距仍取字号 40,相邻两列不会叠在一起
+    const out = run('abcdef', { font: null, layout: VERTICAL, maxH: 90, track: -10 })
+    expect(columnXs(out)).toEqual([80, 120])
+    expect(columnXs(out)[1] - columnXs(out)[0]).toBe(40)
+  })
+
+  it('换列后颜色、加粗等既有能力不变', () => {
+    const out = run('abcdef', { layout: VERTICAL, maxH: 80, color: '#123456' })
+    expect(out.match(/fill="#123456"/g)).toHaveLength(1)
+    expect(out).toContain('stroke-width="1.4"')
+  })
+
+  it('无字体降级路径同样换列,仍是逐字一条 <text>', () => {
+    const out = run('abcdef', { font: null, layout: VERTICAL, maxH: 80 })
+    expect(out.match(/<text /g)).toHaveLength(6)
+    expect(out.match(/text-anchor="middle"/g)).toHaveLength(6)
+    expect(columnXs(out)).toHaveLength(3)
+  })
+})
+
+describe('换行的边界量按方向分工', () => {
+  it('横排只读 maxW:给了 maxH 也不会换行或分列', () => {
+    const out = run('abcdefgh', { maxH: 40 })
+    expect(out.match(/<path /g)).toHaveLength(1)
+    expect(out).not.toContain('rotate(')
+  })
+
+  it('竖排只读 maxH:给了 maxW 也不会被压缩', () => {
+    const out = run('abcdef', {
+      font: null, layout: { curve: 0, direction: 'vertical' }, maxW: 10, maxH: 80,
+    })
+    expect(out).not.toContain('scale(')
+    expect(columnXs(out)).toHaveLength(3)
+  })
+
+  it('弯曲度仍然只对横排生效:竖排设了弯曲也不逐字旋转', () => {
+    const out = run('abcdef', {
+      font: null, layout: { curve: 80, direction: 'vertical' }, maxH: 80,
+    })
+    expect(out).not.toContain('rotate(')
+    expect(columnXs(out)).toHaveLength(3)
+  })
+})
+
+describe('verticalColumns', () => {
+  it('不限高(maxH = 0)时整段排成一列', () => {
+    expect(verticalColumns('abc', 40, 0, 0)).toEqual([['a', 'b', 'c']])
+  })
+
+  it('按可用高度整除分列,末尾不足一列也算一列', () => {
+    expect(verticalColumns('abcde', 40, 0, 80)).toEqual([['a', 'b'], ['c', 'd'], ['e']])
+  })
+
+  it('换行强制断列,空行不产生空列', () => {
+    expect(verticalColumns('ab\n\ncd', 40, 0, 0)).toEqual([['a', 'b'], ['c', 'd']])
+  })
+
+  it('空文本没有列', () => {
+    expect(verticalColumns('', 40, 0, 80)).toEqual([])
+  })
+
+  it('verticalStep 与字号、字距同基准', () => {
+    expect(verticalStep(40, 10)).toBe(50)
+    expect(verticalStep(40, 0)).toBe(40)
   })
 })
 

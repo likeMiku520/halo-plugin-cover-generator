@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { buildCoverSvg, LAYOUT } from './svgBuilder'
-import { REF_H, REF_W } from './layout'
+import { REF_H, REF_W, defaultCoverState, defaultTextStyles } from './layout'
 import { parseFont, type OpentypeFont } from './fontLoader'
 import { makeCoverState } from './coverState'
 
@@ -558,5 +558,185 @@ describe('背景模式', () => {
     })
     expect(svg).toContain('fill="url(#bg)"')
     expect(svg).not.toContain('<image')
+  })
+})
+
+/**
+ * 竖排换列。
+ *
+ * 全部走无字体路径:那时竖排是逐字一个 <text>,列心就是它的 x,
+ * 换列后的列数、列序、列距都能直接读出来(有字体时整段合成一条 path,位置全在 d 里)。
+ * 画布钉在参考尺寸 1200×630,数值断言都按它校准。
+ */
+describe('buildCoverSvg 竖排换列', () => {
+  const CANVAS = { width: 1200, height: 630 }
+  /** 竖排样式:字距取 0,列距因此正好等于字号,列心好推算 */
+  const VERTICAL = { tracking: 0, curve: 0, direction: 'vertical' as const, color: '#ffffff', bold: false }
+
+  const xsIn = (svg: string) => [...svg.matchAll(/<text x="([-\d.]+)"/g)].map((m) => Number(m[1]))
+  /** 截取某段包裹标记内部的片段:同一份 SVG 里多类文字都会产出 <text>,不截取会串台 */
+  const innerOf = (svg: string, open: string) => {
+    const from = svg.indexOf(open)
+    expect(from).toBeGreaterThanOrEqual(0)
+    const start = from + open.length
+    return svg.slice(start, svg.indexOf('</g>', start))
+  }
+
+  it('竖排标题超出可用高度后换列:列数变多,首列在最右', () => {
+    const svg = buildCoverSvg({
+      state: makeCoverState({
+        titleMode: 'flow', titleFlow: '一二三四五六', titleFontSize: 210, canvas: CANVAS,
+        textStyles: { ...defaultTextStyles(), title: VERTICAL },
+      }),
+      font: null, defaultLogoDataUrl: '',
+    })
+    // 可用高度 = 630 × 0.9333 ≈ 588、步进 = 字号 210 ⇒ 每列 2 字,六个字排 3 列;
+    // 列距 = 210、整块以锚点 x = 600 为心 ⇒ 列心 810 / 600 / 390(自右向左)
+    expect(xsIn(svg)).toEqual([810, 810, 600, 600, 390, 390])
+  })
+
+  it('竖排标题一列放得下时不换列:列心仍是锚点', () => {
+    const svg = buildCoverSvg({
+      state: makeCoverState({
+        titleMode: 'flow', titleFlow: '标题', titleFontSize: 210, canvas: CANVAS,
+        textStyles: { ...defaultTextStyles(), title: VERTICAL },
+      }),
+      font: null, defaultLogoDataUrl: '',
+    })
+    // 两个字 = 420 ≤ 588:保持单列,位置与换列功能加入前完全一致
+    expect(xsIn(svg)).toEqual([600, 600])
+  })
+
+  it('竖排标题里的换行按强制换列处理,不再在同一列里往下续排', () => {
+    const svg = buildCoverSvg({
+      state: makeCoverState({
+        titleMode: 'flow', titleFlow: '一二\n三四', titleFontSize: 210, canvas: CANVAS,
+        textStyles: { ...defaultTextStyles(), title: VERTICAL },
+      }),
+      font: null, defaultLogoDataUrl: '',
+    })
+    // 两列各两个字:首列在右(705)、次列在左(495)
+    expect(xsIn(svg)).toEqual([705, 705, 495, 495])
+  })
+
+  it('竖排副标题超出可用高度后换列', () => {
+    const svg = buildCoverSvg({
+      state: makeCoverState({
+        subtitle: '副'.repeat(30), canvas: CANVAS,
+        textStyles: {
+          ...defaultTextStyles(),
+          subtitle: { ...defaultTextStyles().subtitle, direction: 'vertical' },
+        },
+      }),
+      font: null, defaultLogoDataUrl: '',
+    })
+    const xs = xsIn(innerOf(svg, '<g filter="url(#sub-shadow)" opacity="0.9">'))
+    // 字号 = 34 × 0.5 = 17、字距 0.3 ⇒ 步进 22.1;预算 = 630 × 0.9333 × 0.5 ≈ 294 ⇒ 每列 13 字
+    expect(xs).toHaveLength(30)
+    expect(new Set(xs).size).toBe(3)
+    expect(xs[0]).toBeCloseTo(622.1, 2)
+    expect(xs[xs.length - 1]).toBeCloseTo(577.9, 2)
+  })
+
+  it('竖排水印超出可用高度后换列,且朝画布内侧展开', () => {
+    const svg = buildCoverSvg({
+      state: makeCoverState({
+        watermark: '水'.repeat(20), canvas: CANVAS,
+        textStyles: {
+          ...defaultTextStyles(),
+          watermark: { ...defaultTextStyles().watermark, direction: 'vertical' },
+        },
+      }),
+      font: null, defaultLogoDataUrl: '',
+    })
+    const xs = xsIn(innerOf(svg, '<g opacity="0.65">'))
+    // 字号 26、字距 0.08 ⇒ 步进 28.08;预算 = 630 × 0.35 ≈ 220 ⇒ 每列 7 字,20 字排 3 列
+    expect(new Set(xs).size).toBe(3)
+    expect(xs[0]).toBeCloseTo(1168.08, 2)
+    // 自右向左展开:后续列朝画布内侧走,不会因为换列而探出右缘
+    for (const x of xs) expect(x).toBeLessThanOrEqual(CANVAS.width)
+  })
+
+  it('竖排自定义文字元素超出可用高度后换列', () => {
+    const svg = buildCoverSvg({
+      state: makeCoverState({
+        canvas: CANVAS,
+        customElements: [{
+          id: 't1', kind: 'text', content: '', text: '字'.repeat(30),
+          size: 40, anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 },
+          color: '#39c5bb', bold: false, tracking: 0, curve: 0,
+          direction: 'vertical' as const, aspect: 1,
+        }],
+      }),
+      font: null, defaultLogoDataUrl: '',
+    })
+    // 字号 40、步进 40;预算 = 630 × 0.75 ≈ 472 ⇒ 每列 11 字,30 字排 3 列,列心 640 / 600 / 560
+    expect(xsIn(innerOf(svg, '<g>'))).toEqual([
+      640, 640, 640, 640, 640, 640, 640, 640, 640, 640, 640,
+      600, 600, 600, 600, 600, 600, 600, 600, 600, 600, 600,
+      560, 560, 560, 560, 560, 560, 560, 560,
+    ])
+  })
+
+  it('竖排换列后投影、旋转与透明度照旧生效', () => {
+    const svg = buildCoverSvg({
+      state: makeCoverState({
+        titleMode: 'flow', titleFlow: '一二三四五六', titleFontSize: 210, canvas: CANVAS,
+        layout: {
+          ...defaultCoverState().layout,
+          title: { x: 0.5, y: 0.5, scale: 1, opacity: 0.5, rotation: 30 },
+        },
+        textStyles: { ...defaultTextStyles(), title: VERTICAL },
+      }),
+      font: null, defaultLogoDataUrl: '',
+    })
+    expect(svg).toContain('<g filter="url(#shadow)">')
+    expect(svg).toContain('rotate(30 600 315)')
+    expect(svg).toContain('<g opacity="0.5">')
+  })
+})
+
+/** 真实字体下的竖排:整段合成一条 path,字形坐标全在 d 里,换列效果只能从跨度上看 */
+describe.skipIf(!hasFont)('buildCoverSvg 竖排换列(真实字体)', () => {
+  const CANVAS = { width: 1200, height: 630 }
+  /** pathToD 只写坐标数字,因此 d 里的数字是成对的 x / y */
+  const coordsOf = (svg: string) => {
+    const nums = [.../<path d="([^"]*)"/.exec(svg)![1].matchAll(/-?\d+(?:\.\d+)?/g)]
+      .map((m) => Number(m[0]))
+    return {
+      xs: nums.filter((_, i) => i % 2 === 0),
+      ys: nums.filter((_, i) => i % 2 === 1),
+    }
+  }
+  const verticalTitleState = (text: string) => makeCoverState({
+    titleMode: 'flow', titleFlow: text, titleFontSize: 210, canvas: CANVAS,
+    textStyles: {
+      ...defaultTextStyles(),
+      title: { ...defaultTextStyles().title, direction: 'vertical' },
+    },
+  })
+
+  it('六个字按每列 2 字换列:横向铺开成三列,纵向不再一路堆到画布外', () => {
+    const svg = buildCoverSvg({
+      state: verticalTitleState('一二三四五六'), font: getFont(), defaultLogoDataUrl: '',
+    })
+    const { xs, ys } = coordsOf(svg)
+    const spanX = Math.max(...xs) - Math.min(...xs)
+    const spanY = Math.max(...ys) - Math.min(...ys)
+    // 列距 = 字号 210:三列铺开后横向跨度远超一个字宽
+    expect(spanX).toBeGreaterThan(210 * 2)
+    // 每列 2 字:纵向跨度收在两行上下(不换列时六个字要排到 1000px 开外)
+    expect(spanY).toBeLessThan(210 * 3)
+  })
+
+  it('单列放得下时仍是一列,字形不外扩', () => {
+    const svg = buildCoverSvg({
+      state: verticalTitleState('标题'), font: getFont(), defaultLogoDataUrl: '',
+    })
+    const { xs } = coordsOf(svg)
+    const spanX = Math.max(...xs) - Math.min(...xs)
+    expect(spanX).toBeLessThan(210)
+    // 单列居中在锚点 x = 600 上
+    expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(600, 0)
   })
 })

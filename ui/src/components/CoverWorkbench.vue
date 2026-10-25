@@ -10,10 +10,10 @@ import { describeCanvas } from '../lib/canvasPresets'
 import { coverAttachmentFileName, downloadPng, downloadSvg, svgFileName, svgToPngBlob } from '../lib/exporters'
 import { updatePostCover, uploadCoverPng, type PostSummary } from '../api/haloClient'
 import { BUILTIN_FONT_URL } from '../lib/fontLoader'
-import { CANVAS, normalizeAnchor } from '../lib/layout'
+import { CANVAS, customSizeLimitsOf, normalizeAnchor, scaleLimitsOf } from '../lib/layout'
 import type { Anchor } from '../lib/types'
 import {
-  anchorOfTargets, deleteSelection, useCanvasInteraction,
+  anchorOfTargets, clampScalePercent, deleteSelection, useCanvasInteraction,
   type AnchorPatch, type SelectionId,
 } from '../composables/useCanvasInteraction'
 import ControlPanel from './ControlPanel.vue'
@@ -58,7 +58,7 @@ const TITLE_FONT_MAX = CANVAS.TITLE_BASE
 
 /** 选中目标的锚点写入:内置元素进 layout,自定义元素进 customElements。
  *
- * 以现有锚点为底、只覆盖本次改动的字段:拖动/滚轮/旋转/键盘各改各的,
+ * 以现有锚点为底、只覆盖本次改动的字段:拖动/滚轮/旋转/拉大/键盘各改各的,
  * 若从零构造锚点对象,没提到的字段(透明度等)会被一并抹回默认值。
  */
 function applyAnchor(id: SelectionId, next: AnchorPatch) {
@@ -66,11 +66,13 @@ function applyAnchor(id: SelectionId, next: AnchorPatch) {
   if (!base) return
   const x = next.x ?? base.x
   const y = next.y ?? base.y
+  /** 这次补丁是否真的改倍率：只有改倍率时才需要折算到「该元素的大小 owner」 */
+  const scaling = next.scale !== undefined && next.scale !== base.scale
+  const ratio = scaling && base.scale > 0 ? next.scale! / base.scale : 1
 
   // 标题的「大小」由 titleFontSize 独家承担(面板那条滑杆写的就是它,并把倍率归位 1)。
   // 若照其他元素那样写 anchor.scale,滚轮只动到「可用宽度预算」,短标题几乎看不出变化。
-  if (id === 'title' && next.scale !== undefined && next.scale !== base.scale) {
-    const ratio = base.scale > 0 ? next.scale / base.scale : 1
+  if (id === 'title' && scaling) {
     // 先把存档里可能不为 1 的倍率折算进字号再乘本次比值:归位倍率时观感大小不跳变
     const fontSize = Math.min(
       TITLE_FONT_MAX,
@@ -83,12 +85,48 @@ function applyAnchor(id: SelectionId, next: AnchorPatch) {
     return
   }
 
-  // 旋转对所有元素通用:都落在各自锚点的 rotation 上,由 normalizeAnchor 收敛进 ±180
+  // 自定义图片/SVG 的「大小」由 el.size(面板的「宽度/边长」px 滑杆)独家承担:面板已不再给
+  // 它们显示「大小(%)」滑杆,若滚轮继续写 anchor.scale,就会「画面变了、面板没变」(实机反馈)。
+  // 文字元素不在此列:它的「大小(%)」滑杆读的正是 anchor.scale。
+  if (scaling && id.startsWith('custom:')) {
+    const target = id.slice('custom:'.length)
+    const el = state.value.customElements.find((c) => c.id === target)
+    if (el && el.kind !== 'text') {
+      // 先把可能不为 1 的倍率折算进 px 再乘本次比值:归位倍率时画面大小不跳变。
+      // 边界取 layout 的 customSizeLimitsOf（按类型取行，与面板滑杆同一份）
+      const limits = customSizeLimitsOf(el.kind)
+      const size = Math.min(
+        limits.max,
+        Math.max(limits.min, Math.round(el.size * base.scale * ratio)),
+      )
+      if (size === el.size && base.scale === 1) return // 已顶到 px 上下限
+      state.value.customElements = state.value.customElements.map((c) => c.id === target
+        ? {
+            ...c,
+            size,
+            anchor: normalizeAnchor({
+              ...c.anchor, x, y, scale: 1, rotation: next.rotation ?? c.anchor.rotation,
+            }),
+          }
+        : c)
+      return
+    }
+  }
+
+  // 其余元素:倍率写在锚点上,边界在写回这**一次**统一裁决——面板滑杆/滚轮/拉大手柄
+  // 都不各自夹取,「拖动只给比值、边界由 owner 裁决」才有一致的落点。
+  // 旋转对所有元素通用,同样落在锚点的 rotation 上(收敛进 ±180)。
+  const limits = scaleLimitsOf(id)
+  const scale = scaling
+    ? clampScalePercent(
+        Math.round(next.scale! * 100), Math.round(base.scale * 100), limits.min, limits.max,
+      ) / 100
+    : base.scale
   const anchor = normalizeAnchor({
     ...base,
     x,
     y,
-    scale: next.scale ?? base.scale,
+    scale,
     rotation: next.rotation ?? base.rotation,
   })
   if (id.startsWith('custom:')) {

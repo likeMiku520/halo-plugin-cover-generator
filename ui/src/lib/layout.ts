@@ -80,6 +80,22 @@ export function scaleLimitsOf(id: string | null | undefined): { min: number; max
   return ELEMENT_SCALE_LIMITS.other
 }
 
+/**
+ * 自定义元素「边长/宽度(px)」的上下限。
+ *
+ * 与 scaleLimitsOf 同理：面板滑杆、预览滚轮、选中框的拉大手柄都读这一份，
+ * 任何一处自己抄一套数字，滚轮与滑杆就会在边界上打架。
+ */
+export const CUSTOM_SIZE_LIMITS = {
+  text: { min: 16, max: 200 },
+  other: { min: 24, max: 600 },
+} as const
+
+/** 按自定义元素类型取边长/宽度上下限（文字是字号，图片与 SVG 是边长/宽度） */
+export function customSizeLimitsOf(kind: string | null | undefined): { min: number; max: number } {
+  return kind === 'text' ? CUSTOM_SIZE_LIMITS.text : CUSTOM_SIZE_LIMITS.other
+}
+
 const anchor = (x: number, y: number, scale = 1): Anchor => ({
   x, y, scale, opacity: 1, rotation: 0,
 })

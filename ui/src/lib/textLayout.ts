@@ -29,7 +29,11 @@ export interface TextFont {
  * 三种排布:
  * - 直线(默认):整段合成一条 path,输出与历史版本逐字一致;
  * - 圆弧:逐字给出自己的旋转与位移,只能一个字一条 path;
- * - 竖排:逐字沿 y 堆叠,仍可合成一条 path(位置直接写进各自的字形坐标)。
+ * - 竖排:逐字沿 y 堆叠,一列排满可用高度后换列(按中文竖排的行序自右向左),
+ *   仍可合成一条 path(位置直接写进各自的字形坐标)。
+ *
+ * 换行的边界量按方向分工:横排给 maxW(超出则整段压扁),竖排给 maxH(超出则换列)。
+ * 两者都是「调用方算好的可用空间」,本模块因此不需要知道画布尺寸。
  */
 
 export type TextDirection = 'horizontal' | 'vertical'
@@ -138,31 +142,97 @@ function alignedLeft(x: number, width: number, anchor: AnchorAlign): number {
   return x
 }
 
+/** 竖排的逐字步进:列内每下一个字下移这么多(字高 + 字距) */
+export function verticalStep(fontSize: number, trackPx: number): number {
+  return fontSize * VERTICAL_STEP + trackPx
+}
+
 /**
- * 竖排:逐字沿 y 堆叠,列的水平中心落在 x、垂直中心落在 y。
- * 竖排不做压缩——纵向预算与横向预算不是同一个量,横排那套 fit 在这里没有意义,
- * 字号由用户的大小滑杆掌握。
+ * 竖排的列距(相邻两列列心之间的距离)。
+ *
+ * 列宽取字号——竖排里一个字的占位就是 1em,与字体给出的字宽无关;
+ * 列间距复用字距:竖排里「字距」本就是字与字之间的呼吸,横过来正好是列与列之间的呼吸,
+ * 多列排版因此不需要再引入一个用户没见过的参数(面板上也没有它的位置)。
+ * 负字距只收紧列内步进:若它也收紧列距,两列会挤到笔画重叠、整块读不出来。
+ */
+export function verticalColumnStep(fontSize: number, trackPx: number): number {
+  return fontSize + Math.max(0, trackPx)
+}
+
+/**
+ * 竖排分列:一列排满可用高度后另起一列。
+ *
+ * maxH <= 0 表示不限高——与横排 maxW = 0 的「不压缩」同一语义,
+ * 也是调用方没给高度预算时的默认行为(单列,与历史输出一致)。
+ * 文本里的 \n 按强制换列处理:竖排里「换行」与「换列」本就是同一件事。
+ * 空行不产生空列——那一列只有空白,读不出内容也量不出高度。
+ *
+ * 返回逐列的字序数组,渲染与命中几何共用它,免得两处各算一套换列位置。
+ */
+export function verticalColumns(
+  s: string, fontSize: number, trackPx: number, maxH: number,
+): string[][] {
+  const step = verticalStep(fontSize, trackPx)
+  // 容量按「列高 = 步进 × 字数」计,与命中几何同一口径:一列因此永不高于可用高度。
+  // step <= 0 只可能来自畸形字号/字距,此时退回不限高,避免按 0 除出无意义的列数。
+  const per = maxH > 0 && step > 0 ? Math.max(1, Math.floor(maxH / step)) : 0
+  const columns: string[][] = []
+  for (const para of s.split('\n')) {
+    const chars = [...para]
+    if (!chars.length) continue
+    if (per <= 0) {
+      columns.push(chars)
+      continue
+    }
+    for (let i = 0; i < chars.length; i += per) columns.push(chars.slice(i, i + per))
+  }
+  return columns
+}
+
+/**
+ * 竖排:逐字沿 y 堆叠,一列排满可用高度后换列,整块的水平中心落在 x、垂直中心落在 y。
+ *
+ * 换列方向取「自右向左」:中文竖排的行序是自上而下、自右向左,首列贴在整个列阵的最右,
+ * 后续各列依次向左展开(横排的从左到右,在竖排里对应的就是从上到下)。
+ * 整块以锚点为心:列阵在 x 上左右对称、各列齐头(顶端对齐),最高的一列在 y 上居中。
+ * 单列时列心正好等于 x、列内也不偏移,因此「一列放得下」的输出仍与历史版本逐字节一致。
+ *
+ * 竖排不做压缩——纵向预算与横向预算不是同一个量,横排那套按宽度缩字号的 fit 在这里没有意义;
+ * 排不下时的处理是换列,而不是把字压扁。
  */
 function layoutVertical(
-  font: TextFont | null, glyphs: GlyphAdvance[], x: number, y: number,
-  fontSize: number, trackPx: number, color: string, bold: boolean,
+  font: TextFont | null, s: string, x: number, y: number, fontSize: number,
+  trackPx: number, color: string, bold: boolean, maxH: number,
 ): string {
-  const step = fontSize * VERTICAL_STEP + trackPx
-  const total = step * Math.max(0, glyphs.length - 1)
-  const startY = y - total / 2
+  const columns = verticalColumns(s, fontSize, trackPx, maxH)
+  if (!columns.length) return ''
+  const step = verticalStep(fontSize, trackPx)
+  const colStep = verticalColumnStep(fontSize, trackPx)
+  const count = columns.length
+  const tallest = Math.max(...columns.map((c) => c.length))
+  const startY = y - (step * (tallest - 1)) / 2
+  // 列心:第 0 列(整段开头)在最右,越靠后的列越往左
+  const centerX = (i: number) => x + ((count - 1) / 2 - i) * colStep
   if (font) {
     let d = ''
-    glyphs.forEach((g, i) => {
-      d += pathToD(font.getPath(g.char, x - g.advance / 2, startY + i * step, fontSize))
+    columns.forEach((col, c) => {
+      const cx = centerX(c)
+      col.forEach((char, i) => {
+        // 逐字按自己的字宽水平居中在列心上:字宽只在列内起作用,列距与它无关
+        const advance = font.getAdvanceWidth(char, fontSize)
+        d += pathToD(font.getPath(char, cx - advance / 2, startY + i * step, fontSize))
+      })
     })
     return `<path d="${d}" fill="${esc(color)}"${boldAttrs(fontSize, color, bold)}/>`
   }
   const weight = bold ? 'bold' : 'normal'
-  return glyphs
-    .map((g, i) =>
-      `<text x="${r2(x)}" y="${r2(startY + i * step)}" font-family="sans-serif" ` +
-      `font-weight="${weight}" font-size="${fontSize}" fill="${esc(color)}" ` +
-      `text-anchor="middle">${esc(g.char)}</text>`)
+  return columns
+    .map((col, c) => col
+      .map((char, i) =>
+        `<text x="${r2(centerX(c))}" y="${r2(startY + i * step)}" font-family="sans-serif" ` +
+        `font-weight="${weight}" font-size="${fontSize}" fill="${esc(color)}" ` +
+        `text-anchor="middle">${esc(char)}</text>`)
+      .join(''))
     .join('')
 }
 
@@ -209,21 +279,21 @@ function layoutArc(
 /**
  * 排布一段文字。
  *
- * @param maxW       可用宽度;超出时整段水平压缩(竖排不使用)
+ * @param maxW       可用宽度;超出时整段水平压缩(仅横排)
+ * @param maxH       可用高度;超出时换列(仅竖排)
  * @param extraScale 额外水平压缩系数(分缝模式两段共用,字号已按该系数缩过)
  */
 export function layoutRun(
   font: TextFont | null, s: string, x: number, y: number,
   fontSize: number, trackPx: number, color: string,
-  anchor: AnchorAlign, bold: boolean, maxW: number,
+  anchor: AnchorAlign, bold: boolean, maxW: number, maxH: number,
   layout: RunLayout = STRAIGHT, extraScale = 1,
 ): string {
   const chars = [...s]
   if (!chars.length) return ''
 
   if (layout.direction === 'vertical') {
-    return layoutVertical(font, advancesOf(font, chars, fontSize, trackPx), x, y,
-      fontSize, trackPx, color, bold)
+    return layoutVertical(font, s, x, y, fontSize, trackPx, color, bold, maxH)
   }
 
   const glyphs = advancesOf(font, chars, fontSize, trackPx)

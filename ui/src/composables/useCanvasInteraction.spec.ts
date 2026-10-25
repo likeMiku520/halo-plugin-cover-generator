@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  anchorOfTargets, canDeleteSelection, deleteSelection, hitTest, useCanvasDrag, useCanvasInteraction,
+  anchorOfTargets, canDeleteSelection, clampScalePercent, deleteSelection, hitTest,
+  useCanvasDrag, useCanvasInteraction,
   type AnchorSource, type SelectionId,
 } from './useCanvasInteraction'
 import type { Anchor, AnchorMap, CustomElement, LayerKey } from '../lib/types'
@@ -176,8 +177,27 @@ describe('useCanvasInteraction 选中与键盘微调', () => {
     expect(anchorOfTargets(source, 'custom:el-1')).toBe(source.customElements[0].anchor)
     expect(anchorOfTargets(source, 'custom:missing')).toBeNull()
   })
+})
 
+describe('clampScalePercent 倍率边界(面板/滚轮/写回共用)', () => {
+  it('界内的目标原样返回', () => {
+    expect(clampScalePercent(120, 100, 20, 300)).toBe(120)
   })
+
+  it('超上界:界内值夹到上界,本就在界外的值只允许往回走', () => {
+    expect(clampScalePercent(400, 100, 20, 300)).toBe(300)
+    // 旧档存的 400% 继续往上滚：不再越走越远
+    expect(clampScalePercent(420, 400, 20, 300)).toBe(400)
+    // 往回滚则允许（朝界内）
+    expect(clampScalePercent(380, 400, 20, 300)).toBe(380)
+  })
+
+  it('低于下界同理:界内值夹到下界,界外值只允许朝界内走', () => {
+    expect(clampScalePercent(5, 100, 20, 300)).toBe(20)
+    expect(clampScalePercent(8, 10, 20, 300)).toBe(10)
+    expect(clampScalePercent(12, 10, 20, 300)).toBe(12)
+  })
+})
 
 describe('useCanvasDrag 拖动改位置', () => {
   it('按住元素拖动,位置按指针位移改变比例', () => {
@@ -636,5 +656,112 @@ describe('deleteSelection 删除策略(唯一一份)', () => {
     deleteSelection(state, 'subtitle')
 
     expect(JSON.parse(JSON.stringify(state))).toEqual(snapshot)
+  })
+})
+
+describe('useCanvasDrag 拉大手柄', () => {
+  /** 画布 1024×1024、锚点在正中：距离就是到中心的像素距离 */
+  const atDistance = (px: number, angle = 0): { x: number; y: number } => {
+    const rad = (angle * Math.PI) / 180
+    return {
+      x: (512 + px * Math.cos(rad)) / CANVAS.width,
+      y: (512 + px * Math.sin(rad)) / CANVAS.height,
+    }
+  }
+
+  const beginScaleAt = (px: number, id: SelectionId = 'logo') => {
+    const drag = useCanvasDrag()
+    drag.beginScale({
+      id, anchor: anchorAt(0.5, 0.5, 1), canvas: CANVAS, point: atDistance(px),
+    })
+    return drag
+  }
+
+  it('往外拖变大、往里拖变小,结果是整数百分比', () => {
+    const drag = beginScaleAt(100)
+
+    // 距离翻倍 ⇒ 写回 200%（当前 100%）
+    expect(drag.scaleTo(atDistance(200), CANVAS, 1)).toEqual({ id: 'logo', scale: 2 })
+    // 从 200% 的当前位置收回到起点距离 ⇒ 写回 100%
+    expect(drag.scaleTo(atDistance(100), CANVAS, 2)).toEqual({ id: 'logo', scale: 1 })
+  })
+
+  it('写回的是「这一步乘多少」:对倍率被归位为 1 的元素也成立', () => {
+    const drag = beginScaleAt(100)
+
+    // 标题/自定义图片的锚点倍率写回后被归位成 1，每步读到的当前值都是 100%
+    expect(drag.scaleTo(atDistance(150), CANVAS, 1)?.scale).toBe(1.5)
+    // 150px → 50px：这一步是 1/3，写回 0.33（整数百分比）
+    expect(drag.scaleTo(atDistance(50), CANVAS, 1)?.scale).toBeCloseTo(0.33, 10)
+  })
+
+  it('拖回起点距离时写回原值(不会停在半路)', () => {
+    const drag = beginScaleAt(100)
+
+    expect(drag.scaleTo(atDistance(150), CANVAS, 1)?.scale).toBe(1.5)
+    expect(drag.scaleTo(atDistance(200), CANVAS, 1.5)?.scale).toBe(2)
+    expect(drag.scaleTo(atDistance(100), CANVAS, 2)?.scale).toBe(1)
+  })
+
+  it('没变化时不重复写回(同一位置连续移动只写一次)', () => {
+    const drag = beginScaleAt(100)
+
+    expect(drag.scaleTo(atDistance(140), CANVAS, 1)?.scale).toBe(1.4)
+    expect(drag.scaleTo(atDistance(140), CANVAS, 1.4)).toBeNull()
+  })
+
+  it('只给比值、不夹边界:一次拖到底由写回路径按 owner 裁决', () => {
+    // 从 40px 拖到 1000px = 25 倍：手柄原样写 25，不在这里被夹成 3
+    expect(beginScaleAt(40).scaleTo(atDistance(1000), CANVAS, 1)?.scale).toBe(25)
+    // 元素身份不参与夹取：边界由写回路径取（图片 px / 字号 / scaleLimitsOf）
+    expect(beginScaleAt(40, 'subtitle').scaleTo(atDistance(1000), CANVAS, 1)?.scale).toBe(25)
+    expect(beginScaleAt(40, 'watermark').scaleTo(atDistance(1000), CANVAS, 1)?.scale).toBe(25)
+  })
+
+  it('往回拖同样不限幅:25 倍的距离收回原处就是 1/25', () => {
+    expect(beginScaleAt(1000).scaleTo(atDistance(40), CANVAS, 1)?.scale).toBe(0.04)
+  })
+
+  it('距离按画布像素算:非正方形画布上的斜拖不会被拉偏', () => {
+    const wide = { width: 1024, height: 512 }
+    const drag = useCanvasDrag()
+    // 圆心 (512,256)：按下在 (+100,+50)，拖到 (+200,+150)
+    drag.beginScale({
+      id: 'logo', anchor: anchorAt(0.5, 0.5), canvas: wide,
+      point: { x: 612 / 1024, y: 306 / 512 },
+    })
+
+    const next = drag.scaleTo({ x: 712 / 1024, y: 406 / 512 }, wide, 1)
+
+    // hypot(200,150)/hypot(100,50) = 2.2359… ⇒ 224%（若按比例坐标算会是 255%）
+    expect(next?.scale).toBeCloseTo(2.24, 10)
+  })
+
+  it('起点距离为 0 也不会算出 Infinity', () => {
+    const drag = useCanvasDrag()
+    drag.beginScale({
+      id: 'logo', anchor: anchorAt(0.5, 0.5), canvas: CANVAS, point: { x: 0.5, y: 0.5 },
+    })
+
+    const next = drag.scaleTo(atDistance(100), CANVAS, 1)
+
+    expect(next).not.toBeNull()
+    expect(Number.isFinite(next!.scale)).toBe(true)
+    // 分母被兜到 1px：比值 100 ⇒ 写回 100 倍（夹取交给写回路径，不在这里炸成 Infinity）
+    expect(next!.scale).toBe(100)
+  })
+
+  it('拉大期间 interacting 为真,松手复位;未进入会话时 scaleTo 返回 null', () => {
+    const drag = useCanvasDrag()
+    expect(drag.scaleTo(atDistance(200), CANVAS, 1)).toBeNull()
+
+    drag.beginScale({ id: 'logo', anchor: anchorAt(0.5, 0.5), canvas: CANVAS, point: atDistance(100) })
+    expect(drag.scaling.value).toBe(true)
+    expect(drag.interacting.value).toBe(true) // 预览据此旁路防抖，拉大才跟手
+
+    drag.end()
+    expect(drag.scaling.value).toBe(false)
+    expect(drag.interacting.value).toBe(false)
+    expect(drag.scaleTo(atDistance(200), CANVAS, 1)).toBeNull()
   })
 })

@@ -85,8 +85,8 @@ function guideStyle(g: Guide): Record<string, string> {
 
 const root = ref<HTMLElement>()
 const {
-  guides: activeGuides, dragging, rotating, interacting,
-  begin, move, beginRotate, rotateTo, end, scaleByWheel, markWheelActivity,
+  guides: activeGuides, dragging, rotating, scaling, interacting,
+  begin, move, beginRotate, rotateTo, beginScale, scaleTo, end, scaleByWheel, markWheelActivity,
 } = useCanvasDrag()
 
 /**
@@ -156,6 +156,17 @@ function onRotateStart(ev: PointerEvent, box: ElementBox) {
   beginRotate({ id: box.id as SelectionId, anchor, canvas: props.state.canvas, point })
 }
 
+/** 按下拉大手柄：进入拉大会话。手柄自带 stop，事件不会走到整层的按下逻辑 */
+function onScaleStart(ev: PointerEvent, box: ElementBox) {
+  ev.stopPropagation() // 不让整层把这次按下当成「点空白」或「拖动元素」
+  const point = pointOf(ev)
+  if (!point) return
+  const anchor = anchorOf(box.id as SelectionId)
+  if (!anchor) return
+  ev.preventDefault() // 拉大期间不要顺带选中页面文字
+  beginScale({ id: box.id as SelectionId, anchor, canvas: props.state.canvas, point })
+}
+
 /** 手柄上的按下只属于手柄自己：× 按钮不需要按住拖动，但同样不能冒泡成取消选中 */
 function onHandlePress(ev: PointerEvent) {
   ev.stopPropagation()
@@ -163,13 +174,24 @@ function onHandlePress(ev: PointerEvent) {
 }
 
 function onPointerMove(ev: PointerEvent) {
-  if (!dragging.value && !rotating.value) return
+  if (!dragging.value && !rotating.value && !scaling.value) return
   const point = pointOf(ev)
   if (!point) return
   if (rotating.value) {
     const turned = rotateTo(point, props.state.canvas)
     if (!turned) return
     emit('anchor', turned.id, { rotation: turned.rotation })
+    return
+  }
+  if (scaling.value) {
+    // 当前倍率从状态里读（与滚轮同一份来源）：写回的倍率在「倍率归位为 1」的元素上
+    // 表示乘多少，在其他元素上表示新的倍率，工作台的写回路径据此折算
+    const id = props.selected
+    const current = id ? anchorOf(id) : null
+    if (!current) return
+    const sized = scaleTo(point, props.state.canvas, current.scale)
+    if (!sized) return
+    emit('anchor', sized.id, { scale: sized.scale })
     return
   }
   const next = move(point, {
@@ -208,7 +230,7 @@ function onWheel(ev: WheelEvent) {
   <div
     ref="root"
     class="ov"
-    :class="{ 'is-dragging': dragging, 'is-rotating': rotating }"
+    :class="{ 'is-dragging': dragging, 'is-rotating': rotating, 'is-scaling': scaling }"
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
     @pointerup="onPointerEnd"
@@ -222,7 +244,8 @@ function onWheel(ev: WheelEvent) {
         :style="ringStyle(box)"
       >
         <span class="tag" aria-hidden="true">{{ box.label }}</span>
-        <!-- 手柄放在选中框内部：框随元素旋转，手柄也就跟着转到该在的角上 -->
+        <!-- 手柄放在选中框内部：框随元素旋转，手柄也就跟着转到该在的角上。
+             图标一律 currentColor 描边，颜色取按钮上的 color（主题青一族），不引入新色 -->
         <button
           v-if="canDeleteSelection(box.id as SelectionId)"
           type="button"
@@ -230,13 +253,49 @@ function onWheel(ev: WheelEvent) {
           aria-label="删除元素"
           @pointerdown="onHandlePress"
           @click.stop="onDelete(box.id)"
-        >×</button>
+        >
+          <svg class="handle-icon" viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+            <path
+              d="M3.6 3.6 10.4 10.4M10.4 3.6 3.6 10.4"
+              fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
+            />
+          </svg>
+        </button>
         <button
           type="button"
           class="handle handle-rotate"
           aria-label="旋转元素"
           @pointerdown="onRotateStart($event, box)"
-        ></button>
+        >
+          <svg class="handle-icon" viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+            <path
+              d="M11.9 7A4.9 4.9 0 1 1 8.34 2.34"
+              fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
+            />
+            <path
+              d="M11.9 1.2v3.1h-3.1"
+              fill="none" stroke="currentColor" stroke-width="1.4"
+              stroke-linecap="round" stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="handle handle-scale"
+          aria-label="拉大元素"
+          @pointerdown="onScaleStart($event, box)"
+        >
+          <svg class="handle-icon" viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+            <circle
+              cx="6.1" cy="6.1" r="4.1"
+              fill="none" stroke="currentColor" stroke-width="1.4"
+            />
+            <path
+              d="M9.2 9.2 12.4 12.4"
+              fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
+            />
+          </svg>
+        </button>
       </div>
     </template>
 
@@ -275,9 +334,10 @@ function onWheel(ev: WheelEvent) {
     height var(--sd-dur-move) var(--sd-ease);
 }
 
-/* 拖动/旋转中关掉过渡：选中框若还在做补间，会明显落后于跟手的图元 */
+/* 拖动/旋转/拉大中关掉过渡：选中框若还在做补间，会明显落后于跟手的图元 */
 .ov.is-dragging .ring,
-.ov.is-rotating .ring {
+.ov.is-rotating .ring,
+.ov.is-scaling .ring {
   transition: none;
 }
 
@@ -294,27 +354,37 @@ function onWheel(ev: WheelEvent) {
   white-space: nowrap;
 }
 
-/* 选中框角上的手柄：旋转在右下、删除在右上。
- * 配色只取主题青那一族（--sd-accent*），不引入新色 */
+/* 选中框角上的手柄：删除在右上、旋转在右下、拉大在左下。
+ * 配色只取主题青那一族（--sd-accent*）与「强调底上的前景」令牌，不引入新色；
+ * 图标一律 currentColor 描边，跟着按钮的 color 走 */
 .handle {
   position: absolute;
   display: grid;
   place-items: center;
+  width: 18px;
+  height: 18px;
   padding: 0;
   border: 1.5px solid var(--sd-accent-strong);
-  background: var(--sd-accent);
+  border-radius: 50%;
+  background: var(--sd-accent-strong);
   color: var(--sd-text-on-accent);
   cursor: pointer;
   /* 手柄要能按住拖动/点击，不能被选中框的样式吃掉指针事件 */
   pointer-events: auto;
 }
 
+.handle-icon {
+  display: block;
+}
+
+.handle-delete {
+  right: -9px;
+  top: -9px;
+}
+
 .handle-rotate {
-  right: -7px;
-  bottom: -7px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
+  right: -9px;
+  bottom: -9px;
   cursor: grab;
   /* 抓取光标与旋转语义一致；按下后由浏览器接管指针捕获 */
   touch-action: none;
@@ -324,14 +394,11 @@ function onWheel(ev: WheelEvent) {
   cursor: grabbing;
 }
 
-.handle-delete {
-  right: -7px;
-  top: -9px;
-  width: 16px;
-  height: 16px;
-  border-radius: var(--sd-r-pill);
-  font-size: var(--sd-fs-sm);
-  line-height: 1;
+.handle-scale {
+  left: -9px;
+  bottom: -9px;
+  cursor: nwse-resize;
+  touch-action: none;
 }
 
 .handle:focus-visible {

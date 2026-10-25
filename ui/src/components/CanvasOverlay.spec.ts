@@ -422,31 +422,81 @@ describe('CanvasOverlay 选中框手柄', () => {
     const w = mountOverlay(makeState(), { selected: null })
 
     expect(w.find('.handle-rotate').exists()).toBe(false)
+    expect(w.find('.handle-scale').exists()).toBe(false)
     expect(w.find('.handle-delete').exists()).toBe(false)
   })
 
-  it('选中后右下角是旋转手柄、右上角是删除按钮,都带可访问名称', () => {
+  it('选中后三个角都有手柄,都带可访问名称', () => {
     const w = mountOverlay(makeState({ subtitle: '副标题' }), { selected: 'subtitle' })
 
     expect(w.find('.handle-rotate').attributes('aria-label')).toBe('旋转元素')
+    expect(w.find('.handle-scale').attributes('aria-label')).toBe('拉大元素')
     expect(w.find('.handle-delete').attributes('aria-label')).toBe('删除元素')
     // 手柄是真实按钮：键盘也能聚焦并触发
-    expect(w.find('.handle-rotate').element.tagName).toBe('BUTTON')
-    expect(w.find('.handle-delete').element.tagName).toBe('BUTTON')
+    for (const cls of ['.handle-rotate', '.handle-scale', '.handle-delete']) {
+      expect(w.find(cls).element.tagName).toBe('BUTTON')
+    }
+  })
+
+  it('图标换成 SVG(删除按钮不再用 × 文字字符),描边走 currentColor', () => {
+    const w = mountOverlay(makeState({ subtitle: '副标题' }), { selected: 'subtitle' })
+
+    for (const cls of ['.handle-rotate', '.handle-scale', '.handle-delete']) {
+      const svg = w.find(`${cls} svg`)
+      expect(svg.exists()).toBe(true)
+      expect(svg.attributes('aria-hidden')).toBe('true') // 可访问名称由按钮承担
+      expect(svg.html()).toContain('currentColor')
+    }
+    expect(w.find('.handle-delete').text()).toBe('') // 没有文字字符残留
   })
 
   it('标题不渲染删除按钮(标题不可删除),其余元素都有', () => {
     const title = mountOverlay(makeState(), { selected: 'title' })
     expect(title.find('.handle-delete').exists()).toBe(false)
     expect(title.find('.handle-rotate').exists()).toBe(true)
+    expect(title.find('.handle-scale').exists()).toBe(true) // 标题也能拉大
 
     const logo = mountOverlay(makeState(), { selected: 'logo', hasLogo: true })
     expect(logo.find('.handle-delete').exists()).toBe(true)
+    expect(logo.find('.handle-scale').exists()).toBe(true)
 
     const custom = mountOverlay(makeState({ customElements: [customElement()] }), {
       selected: 'custom:el-1',
     })
     expect(custom.find('.handle-delete').exists()).toBe(true)
+    expect(custom.find('.handle-scale').exists()).toBe(true)
+  })
+
+  it('拖拉大手柄写回倍率(与滚轮同一个补丁),并即时进入交互态', async () => {
+    const state = makeState()
+    const w = mountOverlay(state, { selected: 'title' })
+    const center = anchorPx(state, 'title')
+
+    // 手柄按下的位置无所谓，基准是「按下点到锚点的距离」
+    pointerOn(w.find('.handle-scale').element, 'pointerdown', {
+      clientX: center.x + 100, clientY: center.y,
+    })
+    await nextTick()
+    expect(w.emitted('select')).toBeUndefined()
+    expect(w.emitted('interacting')).toEqual([[true]])
+
+    // 往外拖到两倍距离 ⇒ 写回 200%
+    pointer(w, 'pointermove', { clientX: center.x + 200, clientY: center.y })
+    await nextTick()
+    expect(lastAnchor(w)).toEqual(['title', { scale: 2 }])
+
+    // 工作台会把新倍率立刻写回状态（受控父组件），这里照做再继续拖
+    await w.setProps({
+      state: { ...state, layout: { ...state.layout, title: { ...state.layout.title, scale: 2 } } },
+    })
+    // 收回到起点距离 ⇒ 200% × 1/2 = 100%
+    pointer(w, 'pointermove', { clientX: center.x + 100, clientY: center.y })
+    await nextTick()
+    expect(lastAnchor(w)).toEqual(['title', { scale: 1 }])
+
+    pointer(w, 'pointerup')
+    await nextTick()
+    expect(w.emitted('interacting')).toEqual([[true], [false]])
   })
 
   it('拖旋转手柄写回 anchor.rotation,并即时进入交互态', async () => {

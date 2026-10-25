@@ -214,6 +214,28 @@ interface RotateSession {
 }
 
 /**
+ * 一次拉大会话：以元素锚点为圆心，每一步按「这一步的距离 / 上一步的距离」缩放。
+ *
+ * 为什么是逐步比值而不是「当前距离 / 起点距离」的绝对映射：标题与自定义图片/SVG 的
+ * 大小各有 owner（字号、px 边长），写回时锚点倍率会被归位成 1，于是「写回的倍率」
+ * 在那类元素上等于「这次乘多少」。逐步比值与滚轮是同一个语义，
+ * 绝对映射则会被当成一次乘法而连乘出错误结果（实测差值一倍）。
+ */
+interface ScaleSession {
+  id: SelectionId
+  center: CanvasPoint
+  /** 上一步的指针距离（px）：分母，已做下限保护 */
+  lastDistance: number
+}
+
+/** 指针到圆心的距离（画布像素） */
+function distanceOf(point: CanvasPoint, center: CanvasPoint, canvas: CanvasSize): number {
+  const dx = (point.x - center.x) * canvas.width
+  const dy = (point.y - center.y) * canvas.height
+  return Math.hypot(dx, dy)
+}
+
+/**
  * 指针相对圆心的角度（度）。
  *
  * 必须换算到画布像素再算：比例坐标的 x/y 分母不同（宽 vs 高），
@@ -243,12 +265,14 @@ const clampX = (n: number) => Math.min(1 - CANVAS.MARGIN_X, Math.max(CANVAS.MARG
 const clampY = (n: number) => Math.min(1 - CANVAS.MARGIN_Y, Math.max(CANVAS.MARGIN_Y, n))
 
 /**
- * 倍率边界的夹取。
+ * 倍率边界的夹取——面板滑杆、滚轮与写回路径共用这一套裁决。
  *
  * 界内的值直接夹到边界；当前值本就在界外时（旧档可能存着比面板更宽的倍率）
  * 只允许朝界内的方向继续走：既不会被一次滚动弹到另一头，也不会卡死在界外。
  */
-function clampPercent(target: number, current: number, min: number, max: number): number {
+export function clampScalePercent(
+  target: number, current: number, min: number, max: number,
+): number {
   if (target > max) return current > max ? Math.min(target, current) : max
   if (target < min) return current < min ? Math.max(target, current) : min
   return target
@@ -265,13 +289,17 @@ export function useCanvasDrag() {
   const dragging = ref(false)
   const wheeling = ref(false)
   const rotating = ref(false)
+  const scaling = ref(false)
   /**
-   * 是否正处于一次画布交互（拖动/旋转/滚轮窗口）中。
+   * 是否正处于一次画布交互（拖动/旋转/拉大/滚轮窗口）中。
    * 预览层据此旁路渲染防抖：防抖是为打字合帧，交互期间它只会让图元落后于指针。
    */
-  const interacting = computed(() => dragging.value || rotating.value || wheeling.value)
+  const interacting = computed(
+    () => dragging.value || rotating.value || scaling.value || wheeling.value,
+  )
   let session: DragSession | null = null
   let rotateSession: RotateSession | null = null
+  let scaleSession: ScaleSession | null = null
   /** 不足一个百分点的零头：攒到下一次滚轮，慢滚时既不「纹丝不动」也不跳格 */
   let wheelRemainder = 0
   let wheelIdleTimer: ReturnType<typeof setTimeout> | undefined
@@ -336,8 +364,10 @@ export function useCanvasDrag() {
   function end() {
     session = null
     rotateSession = null
+    scaleSession = null
     dragging.value = false
     rotating.value = false
+    scaling.value = false
     guides.value = []
   }
 
@@ -370,6 +400,43 @@ export function useCanvasDrag() {
     return { id: r.id, rotation: normalizeRotation(r.origin.rotation + delta) }
   }
 
+  /** 进入拉大：记下按下点到锚点的距离，之后每一步按距离比缩放 */
+  function beginScale(o: {
+    id: SelectionId; anchor: Anchor; canvas: CanvasSize; point: CanvasPoint
+  }) {
+    const center = { x: o.anchor.x, y: o.anchor.y }
+    // 下限 1px：按下点几乎压在锚点上时分母不能是 0，否则比值会炸成 Infinity
+    const startDistance = Math.max(distanceOf(o.point, center, o.canvas), 1)
+    scaleSession = { id: o.id, center, lastDistance: startDistance }
+    scaling.value = true
+  }
+
+  /**
+   * 指针移动：返回该写回的倍率（整数百分比）；未在拉大中或没有变化时返回 null。
+   *
+   * currentScale 由调用方从状态里读（与滚轮同一份来源）：写回的倍率对「倍率归位为 1」的
+   * 元素意味着乘多少，对其他元素意味着新的倍率，两种语义在同一个公式下都成立。
+   *
+   * 这里**不夹边界**：一次拖到底要能直接从 24px 到 600px，边界交给写回路径按 owner
+   * 的那一次裁决（图片/SVG 夹 px、字号夹 pt、其余元素夹 scaleLimitsOf）。
+   */
+  function scaleTo(
+    point: CanvasPoint,
+    canvas: CanvasSize,
+    currentScale: number,
+  ): { id: SelectionId; scale: number } | null {
+    const s = scaleSession
+    if (!s) return null
+    const distance = distanceOf(point, s.center, canvas)
+    const stepRatio = distance / s.lastDistance
+    // 分母即使这一步不写回也要推进：否则下一步的比值会从旧位置起算而跳变
+    s.lastDistance = Math.max(distance, 1)
+    const current = Math.round(currentScale * 100)
+    const percent = Math.round(current * stepRatio)
+    if (percent === current) return null
+    return { id: s.id, scale: percent / 100 }
+  }
+
   /**
    * 滚轮缩放：返回新的倍率（必为整数百分比）；未产生变化时返回 null。
    * 上滚放大、下滚缩小；边界按当前选中元素取（与面板滑杆同一份表）。
@@ -387,7 +454,7 @@ export function useCanvasDrag() {
     const current = Math.round(currentScale * 100)
     const target = current + steps
     const limits = scaleLimitsOf(id)
-    const percent = clampPercent(target, current, limits.min, limits.max)
+    const percent = clampScalePercent(target, current, limits.min, limits.max)
     // 顶到边界后清零零头：否则反向滚动要先「还债」，手感像卡住
     if (percent !== target) wheelRemainder = 0
     // 已经在边界上：本次滚动不产生变化，不写回状态（页面滚动仍由调用方拦下）
@@ -406,7 +473,7 @@ export function useCanvasDrag() {
   }
 
   return {
-    guides, dragging, rotating, wheeling, interacting,
-    begin, move, beginRotate, rotateTo, end, scaleByWheel, markWheelActivity,
+    guides, dragging, rotating, scaling, wheeling, interacting,
+    begin, move, beginRotate, rotateTo, beginScale, scaleTo, end, scaleByWheel, markWheelActivity,
   }
 }

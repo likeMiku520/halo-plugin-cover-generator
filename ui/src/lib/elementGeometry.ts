@@ -5,7 +5,8 @@ import {
   byHeight, byWidth, customTextMaxWidth, defaultTextStyles, normalizeAnchor,
   normalizeTextStyle, watermarkMaxWidth,
 } from './layout'
-import { type Ctx, customElementSize, lineWidth, measureTracked, titleGeometry, wrapText } from './svgBuilder'
+import { type Ctx, customElementSize, lineWidth, measureTracked, titleGeometry, verticalTextMaxHeight, wrapText } from './svgBuilder'
+import { verticalColumnStep, verticalColumns, verticalStep } from './textLayout'
 import { readViewBox } from './svgSanitizer'
 
 /**
@@ -41,20 +42,28 @@ function textStyleOf(state: CoverState, key: 'title' | 'subtitle' | 'watermark')
 }
 
 /**
- * 竖排文字的命中框：一列字，宽按字号、高按逐字步进。
- * 与 renderer 同源——竖排的 y 是列的竖直中心，不再是基线。
+ * 竖排文字的命中框：一列字按字号宽、按逐字步进高；一列排不下就换列，
+ * 框宽随列数增长、框高停在最高的一列。
+ *
+ * 与渲染层同源（同一个 verticalColumns/verticalStep）：换列后的实际占位就是命中范围——
+ * 两处各算一套的话，多列元素会出现「框只有一列宽、字却铺开好几列」的脱节。
+ * 单列时各项与旧口径逐字段一致（宽 = 字号、高 = 步进 × 字数），短文本的框不会变样。
  */
 function verticalTextBox(
   id: string, label: string, cx: number, cy: number,
-  text: string, fontSize: number, trackPx: number, rotation: number,
+  text: string, fontSize: number, trackPx: number, maxH: number, rotation: number,
 ): ElementBox {
-  const step = fontSize + trackPx
-  const height = step * Math.max(1, [...text].length)
+  const columns = verticalColumns(text, fontSize, trackPx, maxH)
+  // 列阵整体以锚点为心：列心左右对称、各列齐头，所以框也以 (cx, cy) 为中心
+  const rows = Math.max(1, ...columns.map((c) => c.length))
+  const count = Math.max(1, columns.length)
+  const width = fontSize + (count - 1) * verticalColumnStep(fontSize, trackPx)
+  const height = verticalStep(fontSize, trackPx) * rows
   return {
     id, label,
-    x: cx - fontSize / 2,
+    x: cx - width / 2,
     y: cy - height / 2,
-    width: fontSize,
+    width,
     height,
     centerY: cy,
     rotation,
@@ -110,20 +119,29 @@ export function builtinBoxes(
     const cx = a.x * ctx.W
     const baseline = a.y * ctx.H
     const st = textStyleOf(state, 'title')
-    const trackPx = title.fontSize * st.tracking
     if (st.direction === 'vertical') {
-      // 竖排：整个标题是一列；分缝模式下左右两段各自成列
+      // 竖排一律取基准字号（渲染层的竖排不做横向缩放），因此这里不能复用横排的 fitFontSize 结果；
+      // 分缝模式下左右两段各自成一个列阵，与 titleLayer 的竖排分支一一对应。
+      const base = Math.min(
+        CANVAS.TITLE_BASE, Math.max(CANVAS.TITLE_MIN, state.titleFontSize),
+      ) * ctx.s.h
+      const trackPx = base * st.tracking
+      const maxH = verticalTextMaxHeight('title', ctx, a.scale)
+      const seamHalf = byWidth(state.seamGap, ctx.s) / 2
       const left = state.titleLeft.trim()
       const right = state.titleRight.trim()
-      const segments = state.titleMode === 'flow' || state.logoHidden
-        ? [{ label: '标题', text: `${left}${right}` || state.titleFlow.trim(), cx }]
-        : [
-            ...(left ? [{ label: '标题(左)', text: left, cx: cx - title.seamHalf }] : []),
-            ...(right ? [{ label: '标题(右)', text: right, cx: cx + title.seamHalf }] : []),
-          ]
+      // 取文本的规则与 titleLayer 一致：整块模式只看 titleFlow，无 Logo 时两段拼接为一块
+      const segments = state.titleMode === 'flow'
+        ? [{ label: '标题', text: state.titleFlow.trim(), cx }]
+        : state.logoHidden
+          ? [{ label: '标题', text: `${left}${right}`, cx }]
+          : [
+              ...(left ? [{ label: '标题(左)', text: left, cx: cx - seamHalf }] : []),
+              ...(right ? [{ label: '标题(右)', text: right, cx: cx + seamHalf }] : []),
+            ]
       for (const seg of segments) {
         boxes.push(verticalTextBox(
-          'title', seg.label, seg.cx, baseline, seg.text, title.fontSize, trackPx, a.rotation,
+          'title', seg.label, seg.cx, baseline, seg.text, base, trackPx, maxH, a.rotation,
         ))
       }
     } else if (state.titleMode === 'flow' || state.logoHidden) {
@@ -159,7 +177,8 @@ export function builtinBoxes(
     const maxW = (ctx.W * CANVAS.FULL_MAX_FRACTION) * a.scale
     if (st.direction === 'vertical') {
       boxes.push(verticalTextBox(
-        'subtitle', '副标题', a.x * ctx.W, a.y * ctx.H, sub, base, base * st.tracking, a.rotation,
+        'subtitle', '副标题', a.x * ctx.W, a.y * ctx.H, sub, base, base * st.tracking,
+        verticalTextMaxHeight('subtitle', ctx, a.scale), a.rotation,
       ))
     } else {
       // 与 subTitleLayer 同源：按基准字号等比缩小到可用宽度，不放大
@@ -186,7 +205,8 @@ export function builtinBoxes(
     const fontSize = Math.max(12, Math.round(byHeight(CANVAS.WM_SIZE, ctx.s) * a.scale))
     if (st.direction === 'vertical') {
       boxes.push(verticalTextBox(
-        'watermark', '水印', a.x * ctx.W, a.y * ctx.H, wm, fontSize, fontSize * st.tracking, a.rotation,
+        'watermark', '水印', a.x * ctx.W, a.y * ctx.H, wm, fontSize, fontSize * st.tracking,
+        verticalTextMaxHeight('watermark', ctx, a.scale), a.rotation,
       ))
     } else {
       const maxW = watermarkMaxWidth(ctx) * a.scale
@@ -202,7 +222,7 @@ export function builtinBoxes(
   return boxes
 }
 
-/** 自定义元素的命中几何：文字按实际换行宽高，图形按边长 */
+/** 自定义元素的命中几何：文字按实际断行/换列后的宽高，图形按边长 */
 export function customBoxes(
   elements: CustomElement[], measure: MeasureText, ctx: Ctx,
 ): CustomBox[] {
@@ -215,8 +235,17 @@ export function customBoxes(
     if (el.kind === 'text') {
       const size = customElementSize(el, ctx)
       const trackPx = size * el.tracking
-      const maxW = customTextMaxWidth(ctx) * a.scale
       const text = el.text.trim()
+      if (el.direction === 'vertical') {
+        // 竖排按可用高度换列，框宽随列数增长：与渲染层共用同一个 verticalColumns，
+        // 事件里拖动、选中框与手柄因此都落在换列后的实际占位上（含 \n 强制换列）
+        const box = verticalTextBox(
+          id, label, cx, cy, text, size, trackPx,
+          verticalTextMaxHeight('custom', ctx, a.scale), a.rotation,
+        )
+        return { ...box, elementId: el.id }
+      }
+      const maxW = customTextMaxWidth(ctx) * a.scale
       const lines = text ? wrapText(text, maxW, size, measure, trackPx) : ['']
       const width = Math.max(...lines.map((l) => measureTracked(measure, l, size, trackPx)), 1)
       const lineHeight = Math.round(size * 1.18)

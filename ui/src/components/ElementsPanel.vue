@@ -3,8 +3,8 @@ import { computed, ref } from 'vue'
 import { FormKit } from '@formkit/vue'
 import type { Anchor, AnchorKey, CoverState, CustomElement, CustomKind, LayerKey, TextTypography } from '../lib/types'
 import {
-  CANVAS, REF_H, REF_W, TEXT_STYLE_LIMITS, defaultAnchors, defaultCoverState, defaultTextStyles,
-  normalizeAnchor, scaleLimitsOf,
+  CANVAS, REF_H, REF_W, TEXT_STYLE_LIMITS, customSizeLimitsOf, defaultAnchors, defaultCoverState,
+  defaultTextStyles, normalizeAnchor, scaleLimitsOf,
 } from '../lib/layout'
 import { anchorLabel, type SelectionId } from '../composables/useCanvasInteraction'
 import { fetchLogoAsDataUrl } from '../lib/logoFetcher'
@@ -401,8 +401,9 @@ async function onIconPicked(pick: unknown) {
   }
 }
 
+/** 边长/宽度(或字号)的上下限：映射在 layout 的 customSizeLimitsOf，与预览滚轮/拉大手柄共用 */
 function sizeRange(kind: CustomKind): { min: number; max: number } {
-  return kind === 'text' ? { min: 16, max: 200 } : { min: 24, max: 600 }
+  return customSizeLimitsOf(kind)
 }
 </script>
 

@@ -52,7 +52,7 @@ describe('ElementsPanel 文字排版控件', () => {
       customElements: [{
         id: 'img1', kind: 'image', content: 'data:image/png;base64,AA', text: '', size: 120,
         anchor: { x: 0.5, y: 0.5, scale: 1 }, color: '#ffffff',
-        bold: false, tracking: 0, round: false,
+        bold: false, tracking: 0,
       }],
     })
     expect(wrapper.text()).not.toContain('弯曲度')
@@ -64,7 +64,7 @@ describe('ElementsPanel 文字排版控件', () => {
       customElements: [{
         id: 'x1', kind: 'text', content: '', text: 'hi', size: 48,
         anchor: { x: 0.5, y: 0.5, scale: 1 }, color: '#ffffff',
-        bold: true, tracking: 0, round: false,
+        bold: true, tracking: 0,
       }],
     })
     expect(wrapper.text()).not.toContain('弯曲度')
@@ -92,6 +92,61 @@ describe('ElementsPanel 文字排版控件', () => {
 
     const last = wrapper.emitted('update:modelValue')!.at(-1)![0] as CoverState
     expect(last.textStyles.title.tracking).toBeCloseTo(0.4, 5)
+    wrapper.unmount()
+  })
+})
+
+describe('ElementsPanel 大小滑杆去重与圆形裁剪移除', () => {
+  const SVG_ELEMENT = {
+    id: 's1', kind: 'svg' as const,
+    content: '<svg viewBox="0 0 24 24"><rect width="24" height="24"/></svg>',
+    text: '', size: 120, anchor: { x: 0.5, y: 0.5, scale: 1 },
+    color: '#ffffff', bold: false, tracking: 0,
+  }
+  const IMAGE_ELEMENT = {
+    id: 'i1', kind: 'image' as const, content: 'data:image/png;base64,AA',
+    text: '', size: 120, anchor: { x: 0.5, y: 0.5, scale: 1 },
+    color: '#ffffff', bold: false, tracking: 0,
+  }
+
+  it('SVG 元素只有「边长(px)」一条大小滑杆,不再与「大小(%)」并存', () => {
+    const wrapper = mountPanel('custom:s1', { customElements: [SVG_ELEMENT] })
+    const labels = wrapper.findAll('.sf-label').map((n) => n.text())
+    expect(labels).toContain('边长')
+    expect(labels.filter((l) => l === '大小')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('图片元素同上', () => {
+    const wrapper = mountPanel('custom:i1', { customElements: [IMAGE_ELEMENT] })
+    const labels = wrapper.findAll('.sf-label').map((n) => n.text())
+    expect(labels).toContain('边长')
+    expect(labels.filter((l) => l === '大小')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('内置元素仍保留「大小(%)」', () => {
+    const wrapper = mountPanel('logo')
+    expect(wrapper.findAll('.sf-label').map((n) => n.text())).toContain('大小')
+    wrapper.unmount()
+  })
+
+  it('圆形裁剪开关已移除,图片与 SVG 都不再出现', () => {
+    for (const [id, el] of [['custom:i1', IMAGE_ELEMENT], ['custom:s1', SVG_ELEMENT]] as const) {
+      const wrapper = mountPanel(id, { customElements: [el] })
+      expect(wrapper.text()).not.toContain('圆形裁剪')
+      wrapper.unmount()
+    }
+  })
+
+  it('自定义文字元素保留加粗开关', () => {
+    const wrapper = mountPanel('custom:t1', {
+      customElements: [{
+        id: 't1', kind: 'text', content: '', text: 'hi', size: 48,
+        anchor: { x: 0.5, y: 0.5, scale: 1 }, color: '#ffffff', bold: true, tracking: 0,
+      }],
+    })
+    expect(wrapper.text()).toContain('加粗')
     wrapper.unmount()
   })
 })

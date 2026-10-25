@@ -39,7 +39,12 @@ const fill = computed(() => {
 
 function commit(raw: number) {
   if (!Number.isFinite(raw)) return
-  emit('update:modelValue', Math.min(props.max, Math.max(props.min, raw)))
+  const clamped = Math.min(props.max, Math.max(props.min, raw))
+  // 吸附到步长：拖动时由 range 的 step 保证,手动输入的值也要落到同一批刻度上,
+  // 否则面板里会出现 47.3 这种既不好读、又与拖动结果对不齐的数
+  const step = props.step > 0 ? props.step : 1
+  const snapped = Number((Math.round(clamped / step) * step).toFixed(6))
+  emit('update:modelValue', Math.min(props.max, Math.max(props.min, snapped)))
 }
 
 function onSlider(ev: Event) {

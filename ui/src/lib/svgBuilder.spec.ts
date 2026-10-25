@@ -286,7 +286,7 @@ describe.skipIf(!hasFont)('buildCoverSvg 自定义元素', () => {
         customElements: [{
           id: 't1', kind: 'text', content: '', text: '自定义',
           size: 48, anchor: { x: 0.2, y: 0.15, scale: 1 },
-          color: '#39c5bb', bold: true, tracking: 0, round: false,
+          color: '#39c5bb', bold: true, tracking: 0,
         }],
       },
       font,
@@ -295,21 +295,22 @@ describe.skipIf(!hasFont)('buildCoverSvg 自定义元素', () => {
     expect(svg).toContain('fill="#39c5bb"')
   })
 
-  it('图片元素内嵌 dataURL，圆形裁剪时输出 clipPath', () => {
+  it('图片元素内嵌 dataURL，导出不依赖外链', () => {
     const svg = buildCoverSvg({
       state: {
         ...state,
         customElements: [{
           id: 'i1', kind: 'image', content: 'data:image/png;base64,ZZZ', text: '',
           size: 120, anchor: { x: 0.5, y: 0.5, scale: 1 },
-          color: '#ffffff', bold: false, tracking: 0, round: true,
+          color: '#ffffff', bold: false, tracking: 0,
         }],
       },
       font: null,
       defaultLogoDataUrl: '',
     })
     expect(svg).toContain('data:image/png;base64,ZZZ')
-    expect(svg).toContain('ce-clip-i1')
+    // 圆形裁剪已移除：不再产出 clipPath
+    expect(svg).not.toContain('ce-clip')
   })
 
   it('SVG 图标按 viewBox 缩放，非方形图标不被拉伸', () => {
@@ -320,7 +321,7 @@ describe.skipIf(!hasFont)('buildCoverSvg 自定义元素', () => {
           id: 's1', kind: 'svg',
           content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 24"><rect width="48" height="24" fill="#fff"/></svg>',
           text: '', size: 240, anchor: { x: 0.5, y: 0.5, scale: 1 },
-          color: '#ffffff', bold: false, tracking: 0, round: false,
+          color: '#ffffff', bold: false, tracking: 0,
         }],
       },
       font: null,
@@ -337,7 +338,7 @@ describe.skipIf(!hasFont)('buildCoverSvg 自定义元素', () => {
         customElements: [{
           id: 'i2', kind: 'image', content: 'data:image/png;base64,ZZZ', text: '',
           size: 100, anchor: { x: 0.5, y: 0.5, scale },
-          color: '#ffffff', bold: false, tracking: 0, round: false,
+          color: '#ffffff', bold: false, tracking: 0,
         }],
       },
       font: null,

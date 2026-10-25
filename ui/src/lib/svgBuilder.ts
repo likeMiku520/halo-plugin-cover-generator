@@ -568,17 +568,12 @@ function customElementLayer(
   }
 
   const size = customElementSize(el, ctx)
-  const clipDefs = el.round
-    ? `<defs><clipPath id="ce-clip-${esc(el.id)}">` +
-      `<circle cx="${r2(x)}" cy="${r2(y)}" r="${r2(size / 2)}"/></clipPath></defs>`
-    : ''
-  const cp = el.round ? ` clip-path="url(#ce-clip-${esc(el.id)})"` : ''
 
   if (el.kind === 'image') {
     if (!el.content) return ''
-    return clipDefs + `<image href="${esc(el.content)}" xlink:href="${esc(el.content)}" ` +
+    return `<image href="${esc(el.content)}" xlink:href="${esc(el.content)}" ` +
       `x="${r2(x - size / 2)}" y="${r2(y - size / 2)}" ` +
-      `width="${r2(size)}" height="${r2(size)}" preserveAspectRatio="xMidYMid slice"${cp}/>`
+      `width="${r2(size)}" height="${r2(size)}" preserveAspectRatio="xMidYMid slice"/>`
   }
 
   // svg 图标：录入时已过白名单；此处按 viewBox 等比缩放到目标尺寸，
@@ -592,6 +587,6 @@ function customElementLayer(
   const offsetY = -vy - vh / 2
   // color 是 color 属性的呈现属性,标记里的 currentColor 由它解析:
   // 图标按 currentColor 入库,颜色因此是渲染期输入,改色无需重取标记
-  return clipDefs + `<g color="${esc(el.color)}" transform="translate(${r2(x)} ${r2(y)}) scale(${r2(scale)}) ` +
-    `translate(${r2(offsetX)} ${r2(offsetY)})"${cp}>${inner}</g>`
+  return `<g color="${esc(el.color)}" transform="translate(${r2(x)} ${r2(y)}) scale(${r2(scale)}) ` +
+    `translate(${r2(offsetX)} ${r2(offsetY)})">${inner}</g>`
 }

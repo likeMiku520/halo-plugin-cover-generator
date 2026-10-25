@@ -68,7 +68,7 @@ function isValidCustomElement(v: unknown): v is CustomElement {
   if (typeof e.size !== 'number' || !Number.isFinite(e.size)) return false
   if (!isValidAnchor(e.anchor)) return false
   if (typeof e.color !== 'string' || !HEX.test(e.color)) return false
-  if (typeof e.bold !== 'boolean' || typeof e.round !== 'boolean') return false
+  if (typeof e.bold !== 'boolean') return false
   if (typeof e.tracking !== 'number' || !Number.isFinite(e.tracking)) return false
   // image 只接受 dataURL:与 Logo 同一边界,外链会破坏「导出 SVG 自包含」
   if (e.kind === 'image' && !/^data:image\//i.test(e.content)) return false

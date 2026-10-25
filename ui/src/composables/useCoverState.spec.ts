@@ -533,4 +533,25 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
       })
     })
   })
+
+  describe('默认位置（重置）取整数百分比', () => {
+    it('四个元素的默认锚点都是整百分比、大小为 100%', () => {
+      localStorage.clear()
+      const s = useCoverState()
+      for (const key of ['logo', 'title', 'subtitle', 'watermark'] as const) {
+        const a = s.value.layout[key]
+        // 面板显示的是四舍五入后的百分比：只有存进去的就是整数，重置完才名实相符。
+        // x*100 带浮点尾数（0.56*100 = 56.00000000000001），所以用容差判定
+        for (const v of [a.x, a.y]) {
+          expect(Math.abs(v * 100 - Math.round(v * 100))).toBeLessThan(1e-9)
+        }
+        expect(a.scale).toBe(1)
+      }
+      // 重置后各元素落在哪里：与 1200×630 旧硬编码布局基本重合
+      expect(s.value.layout.logo).toMatchObject({ x: 0.5, y: 0.52 })
+      expect(s.value.layout.title).toMatchObject({ x: 0.5, y: 0.56 })
+      expect(s.value.layout.subtitle).toMatchObject({ x: 0.5, y: 0.8 })
+      expect(s.value.layout.watermark).toMatchObject({ x: 0.96, y: 0.94 })
+    })
+  })
 })

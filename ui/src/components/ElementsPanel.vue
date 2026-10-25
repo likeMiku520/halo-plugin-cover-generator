@@ -184,7 +184,6 @@ function newElement(kind: CustomKind, patch: Partial<CustomElement> = {}): Custo
     color: '#ffffff',
     bold: true,
     tracking: 0,
-    round: false,
     ...patch,
   }
 }
@@ -492,7 +491,7 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
             @update:model-value="onTitleSizePercent"
           />
           <SliderField
-            v-else
+            v-else-if="!activeElement || activeElement.kind === 'text'"
             :model-value="Math.round(activeAnchor.scale * 100)"
             :min="20"
             :max="300"
@@ -587,20 +586,15 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
                 @input="onElementColor(activeElement.id, ($event.target as HTMLInputElement).value)"
               />
             </label>
-            <label class="tg">
+            <!-- 图片与 SVG 的大小由「边长(px)」独家负责:此前与「大小(%)」并存,
+                 两者改的是同一个量,面板里出现两条互相打架的滑杆(实机反馈) -->
+            <label v-if="activeElement.kind === 'text'" class="tg">
               <input
-                v-if="activeElement.kind === 'text'"
                 type="checkbox"
                 :checked="activeElement.bold"
                 @change="updateElement(activeElement.id, { bold: ($event.target as HTMLInputElement).checked })"
               />
-              <input
-                v-else
-                type="checkbox"
-                :checked="activeElement.round"
-                @change="updateElement(activeElement.id, { round: ($event.target as HTMLInputElement).checked })"
-              />
-              {{ activeElement.kind === 'text' ? '加粗' : '圆形裁剪' }}
+              加粗
             </label>
           </div>
         </template>

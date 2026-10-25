@@ -86,8 +86,6 @@ export interface CustomElement {
   bold: boolean
   /** 仅 text 使用：字距（em） */
   tracking: number
-  /** 仅 image/svg 使用：圆形裁剪 */
-  round: boolean
 }
 
 /** 封面全部可编辑状态 */

@@ -50,15 +50,16 @@ export const WM_TRACK = 0.08
 const anchor = (x: number, y: number, scale = 1): Anchor => ({ x, y, scale })
 
 /**
- * 默认锚点：取值等价于改造前 1200×630 的硬编码布局。
- * 锚点是比例值，换分辨率后各元素仍落在画布的相对同一处。
+ * 默认锚点：整数百分比，重置后每个数值框里都是干净整数。
+ * 取值贴近改造前 1200×630 的硬编码布局（原先 0.5238/0.5556 这类比值
+ * 显示时被四舍五入，重置完看着是 52%/56%、实际存的却是小数，实机反馈）。
  */
 export function defaultAnchors(): AnchorMap {
   return {
-    logo: anchor(0.5, 0.5238),
-    title: anchor(0.5, 0.5556),
-    subtitle: anchor(0.5, 0.8016),
-    watermark: anchor(0.9567, 0.9365),
+    logo: anchor(0.5, 0.52),
+    title: anchor(0.5, 0.56),
+    subtitle: anchor(0.5, 0.8),
+    watermark: anchor(0.96, 0.94),
   }
 }
 

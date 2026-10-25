@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { axiosInstance } from '@halo-dev/api-client'
-import { listImageAttachments, searchPosts, updatePostCover, uploadCoverPng } from './haloClient'
+import { searchPosts, updatePostCover, uploadCoverPng } from './haloClient'
 import type { PluginSettings } from '../composables/usePluginSettings'
 
 /** 设置仅提供策略/分组两个上传参数,其余字段与本测试无关 */
@@ -536,66 +536,5 @@ describe('updatePostCover', () => {
     await expect(updatePostCover('gone', '/upload/c.png')).rejects.toThrow('绑定文章封面失败')
     expect(mockedGet).toHaveBeenCalledTimes(2) // 首次 + 冲突后重取
     expect(mockedPut).toHaveBeenCalledTimes(1) // 重取失败即终止
-  })
-})
-
-describe('listImageAttachments(博客附件选图)', () => {
-  it('走 Console 附件端点:accepts 只要图片,keyword/page/size 原样透传', async () => {
-    mockedGet.mockResolvedValue({ data: { items: [MEASURED_ATTACHMENT], total: 1, hasNext: false } })
-
-    const result = await listImageAttachments('封面', 2, 24)
-
-    expect(mockedGet).toHaveBeenCalledWith('/apis/api.console.halo.run/v1alpha1/attachments', {
-      params: { page: 2, size: 24, keyword: '封面', accepts: ['image/*'] },
-    })
-    expect(result.items).toEqual([
-      {
-        name: MEASURED_ATTACHMENT.metadata.name,
-        displayName: '我的标题-cover.png',
-        link: '/upload/我的标题-cover.png',
-        thumb: '/upload/我的标题-cover.png?width=400',
-      },
-    ])
-    expect(result.total).toBe(1)
-    expect(result.hasNext).toBe(false)
-  })
-
-  it('permalink 缺失的条目被剔除:取不到图的格子不该出现在选择器里', async () => {
-    mockedGet.mockResolvedValue({
-      data: {
-        items: [{ metadata: { name: 'no-link' }, spec: { displayName: '无链接.png' } }, MEASURED_ATTACHMENT],
-        total: 2,
-        hasNext: false,
-      },
-    })
-
-    const result = await listImageAttachments('', 1, 24)
-
-    expect(result.items.map((a) => a.name)).toEqual([MEASURED_ATTACHMENT.metadata.name])
-  })
-
-  it('没有缩略图服务时 thumb 为空,由调用方回退原图', async () => {
-    const onlyPermalink = {
-      ...MEASURED_ATTACHMENT,
-      status: { permalink: MEASURED_ATTACHMENT.status.permalink },
-    }
-    mockedGet.mockResolvedValue({ data: { items: [onlyPermalink], total: 1, hasNext: false } })
-
-    const result = await listImageAttachments('', 1, 24)
-
-    expect(result.items[0].thumb).toBe('')
-    expect(result.items[0].link).toBe('/upload/我的标题-cover.png')
-  })
-
-  it('失败时抛出含服务端 detail 的中文错误', async () => {
-    mockedGet.mockRejectedValue(
-      axiosError(500, { detail: 'Internal server error.', status: 500, title: 'Internal Server Error' }),
-    )
-    await expect(listImageAttachments('', 1, 24)).rejects.toThrow('读取附件库失败:Internal server error.')
-  })
-
-  it('无响应体时给兜底中文文案,而不是裸 axios 错误', async () => {
-    mockedGet.mockRejectedValue(new Error('Network Error'))
-    await expect(listImageAttachments('', 1, 24)).rejects.toThrow('读取附件库失败,请稍后重试')
   })
 })

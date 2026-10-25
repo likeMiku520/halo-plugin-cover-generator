@@ -26,6 +26,9 @@ export const CANVAS = {
   SEAM_GAP: 80,
   SEAM_GAP_MIN: 0,
   SEAM_GAP_MAX: 400,
+  /** 背景图默认压暗强度与上限(%) */
+  BACKGROUND_SCRIM: 20,
+  BACKGROUND_SCRIM_MAX: 60,
   SEG_MAX_FRACTION: 0.4333,
   /** 整块标题可用宽度占画布宽的比例 */
   FULL_MAX_FRACTION: 0.9333,
@@ -130,6 +133,12 @@ export function normalizeSeamGap(value: unknown): number {
   return Math.min(CANVAS.SEAM_GAP_MAX, Math.max(CANVAS.SEAM_GAP_MIN, Math.round(value)))
 }
 
+/** 背景压暗强度收敛进 0–上限 */
+export function normalizeBackgroundScrim(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return CANVAS.BACKGROUND_SCRIM
+  return Math.min(CANVAS.BACKGROUND_SCRIM_MAX, Math.max(0, Math.round(value)))
+}
+
 /** 新建存档的完整默认状态 */
 export function defaultCoverState(): CoverState {
   return {
@@ -142,6 +151,9 @@ export function defaultCoverState(): CoverState {
     subtitle: '',
     gradient: { angle: 120, stops: [{ offset: 0, color: '#f6d365' }, { offset: 100, color: '#fda085' }] },
     presetId: null,
+    backgroundMode: 'gradient',
+    backgroundImage: null,
+    backgroundScrim: CANVAS.BACKGROUND_SCRIM,
     logoDataUrl: null,
     logoHidden: false,
     watermark: '',

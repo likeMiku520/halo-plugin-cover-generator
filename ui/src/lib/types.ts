@@ -39,6 +39,9 @@ export type LayerKey = AnchorKey | `custom:${string}`
 /** 标题排版模式：split 为左右两段各自求齐中缝，flow 为整块自动换行 */
 export type TitleMode = 'split' | 'flow'
 
+/** 背景模式：gradient 用渐变，image 用自定义背景图 */
+export type BackgroundMode = 'gradient' | 'image'
+
 /** 自定义元素类型：image 位图、text 矢量文字、svg 图标 */
 export type CustomKind = 'image' | 'text' | 'svg'
 
@@ -83,6 +86,12 @@ export interface CoverState {
   gradient: Gradient
   /** 命中的预设 id；null 表示自定义渐变 */
   presetId: string | null
+  /** 背景模式；image 时必定存在 backgroundImage（校验层维持该不变式） */
+  backgroundMode: BackgroundMode
+  /** 背景图 dataURL；null 表示未设置。与 Logo 同一边界：只接受内嵌图，不写外链 */
+  backgroundImage: string | null
+  /** 背景图之上的压暗遮罩强度（0–60 %）：照片明暗不可控，不压暗时白字常读不出来 */
+  backgroundScrim: number
   /** 用户上传的 Logo dataURL；null 表示用内置默认 */
   logoDataUrl: string | null
   logoHidden: boolean

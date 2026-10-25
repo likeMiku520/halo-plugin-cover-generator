@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { FormKit } from '@formkit/vue'
 import type { CoverState } from '../lib/types'
 import type { SelectionId } from '../composables/useCanvasInteraction'
 import type { FontLike } from '../lib/svgBuilder'
 import { CANVAS_PRESETS, describeCanvas, presetOfId } from '../lib/canvasPresets'
-import { validateLogoUrl, fetchLogoAsDataUrl, fetchAttachmentAsDataUrl } from '../lib/logoFetcher'
-import type { AttachmentSummary } from '../api/haloClient'
-import AttachmentPicker from './AttachmentPicker.vue'
+import { CANVAS } from '../lib/layout'
+import { validateLogoUrl, fetchLogoAsDataUrl } from '../lib/logoFetcher'
 import GradientPicker from './GradientPicker.vue'
 import ElementsPanel from './ElementsPanel.vue'
 import SliderField from './SliderField.vue'
@@ -108,6 +108,34 @@ async function importFromUrl() {
   }
 }
 
+const backgroundBusy = ref(false)
+
+/**
+ * 背景图:值来自 Halo 内置的附件输入(URL 字符串),取回后内嵌为 dataURL。
+ * 输入被清空(用户移除图片)时回到渐变模式,避免留下「图片模式却没有图」的状态。
+ */
+async function onPickBackground(value: unknown) {
+  const link = typeof value === 'string' ? value.trim() : ''
+  if (!link) {
+    set({ backgroundImage: null, backgroundMode: 'gradient' })
+    return
+  }
+  if (backgroundBusy.value) return
+  backgroundBusy.value = true
+  uploadError.value = ''
+  proxyNotice.value = false
+  try {
+    set({
+      backgroundImage: await fetchLogoAsDataUrl(link, () => { proxyNotice.value = true }),
+      backgroundMode: 'image',
+    })
+  } catch (e) {
+    uploadError.value = e instanceof Error ? e.message : '背景图读取失败'
+  } finally {
+    backgroundBusy.value = false
+  }
+}
+
 /** 恢复默认 Logo:有内置默认则回退到默认图,无(设置 logoUrl 为空)则直接隐藏 */
 function restoreDefaultLogo() {
   set({ logoDataUrl: null, logoHidden: !props.defaultLogoUrl })
@@ -115,13 +143,21 @@ function restoreDefaultLogo() {
 
 const attachmentBusy = ref(false)
 
-/** 从博客附件选图:取回并内嵌为 dataURL,与上传/链接导入同一条自包含边界 */
-async function onPickAttachment(attachment: AttachmentSummary) {
-  if (attachmentBusy.value) return
+/**
+ * 从 Halo 内置的附件输入取图。
+ *
+ * 该输入的值为 URL 字符串(站内附件是 permalink,也可能是在它里面粘贴的外链),
+ * 仍要取回并内嵌为 dataURL:导出 SVG 必须自包含,存档也只接受 data:image/*。
+ * 外链跨域时沿用 Logo 链接导入同一条代理兜底,并同步置位第三方外发披露。
+ */
+async function onPickAttachment(value: unknown) {
+  const link = typeof value === 'string' ? value.trim() : ''
+  if (!link || attachmentBusy.value) return
   attachmentBusy.value = true
   uploadError.value = ''
+  proxyNotice.value = false
   try {
-    set({ logoDataUrl: await fetchAttachmentAsDataUrl(attachment.link) })
+    set({ logoDataUrl: await fetchLogoAsDataUrl(link, () => { proxyNotice.value = true }) })
   } catch (e) {
     uploadError.value = e instanceof Error ? e.message : '附件读取失败'
   } finally {
@@ -268,7 +304,53 @@ const mediaSub = computed(() => {
     </section>
 
     <div class="eyebrow">外观</div>
+    <section class="card">
+      <div class="lb">
+        <b>背景</b>
+        <span class="meta">{{ modelValue.backgroundMode === 'gradient' ? '渐变' : '图片' }}</span>
+      </div>
+      <div class="seg" role="group" aria-label="背景模式">
+        <button
+          type="button"
+          class="seg-btn"
+          :class="{ 'is-on': modelValue.backgroundMode === 'gradient' }"
+          :aria-pressed="modelValue.backgroundMode === 'gradient'"
+          @click="set({ backgroundMode: 'gradient' })"
+        >
+          渐变
+        </button>
+        <button
+          type="button"
+          class="seg-btn"
+          :class="{ 'is-on': modelValue.backgroundMode === 'image' }"
+          :aria-pressed="modelValue.backgroundMode === 'image'"
+          @click="set({ backgroundMode: 'image' })"
+        >
+          图片
+        </button>
+      </div>
+
+      <template v-if="modelValue.backgroundMode === 'image'">
+        <!-- Halo 自带三合一:上传 / 附件库 / 输入链接 -->
+        <div class="picker-slot">
+          <FormKit type="attachment" :accepts="['image/*']" @input="onPickBackground" />
+        </div>
+        <p v-if="backgroundBusy" class="hint" role="status">正在读取背景图…</p>
+        <div class="lb pad-top"><b>压暗</b><span class="meta">让标题在照片上仍读得清</span></div>
+        <SliderField
+          :model-value="modelValue.backgroundScrim"
+          :min="0"
+          :max="CANVAS.BACKGROUND_SCRIM_MAX"
+          :step="5"
+          label="背景压暗"
+          suffix="%"
+          @update:model-value="set({ backgroundScrim: $event })"
+        />
+      </template>
+    </section>
+
     <GradientPicker
+      v-if="modelValue.backgroundMode === 'gradient'"
       :model-value="modelValue"
       @update:model-value="emit('update:modelValue', $event)"
     ></GradientPicker>
@@ -334,9 +416,9 @@ const mediaSub = computed(() => {
           {{ importing ? '导入中…' : '导入' }}
         </button>
       </div>
-      <!-- 附件库:站内已上传的图直接选,不必先下载再本地上传 -->
+      <!-- 附件库:站内已上传的图直接选,不必先下载再本地上传(Halo 自带三合一) -->
       <div class="picker-slot">
-        <AttachmentPicker @pick="onPickAttachment" />
+        <FormKit type="attachment" :accepts="['image/*']" @input="onPickAttachment" />
       </div>
       <p v-if="attachmentBusy" class="hint" role="status">正在读取附件图片…</p>
       <p class="hint">上传或链接导入的图都会转 Base64 内嵌(≤ 2 MB),导出的 SVG 不依赖外链,单文件可用</p>

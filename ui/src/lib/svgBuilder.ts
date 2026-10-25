@@ -18,7 +18,7 @@ import { esc } from './esc'
 import {
   CANVAS, SUB_TRACK, WM_TRACK,
   byHeight, byWidth, customTextMaxWidth, fullMaxWidth,
-  normalizeAnchor, scaleOf, segmentMaxWidth, watermarkMaxWidth,
+  normalizeAnchor, normalizeBackgroundScrim, scaleOf, segmentMaxWidth, watermarkMaxWidth,
   type HasSize, type SizeScale,
 } from './layout'
 import { readViewBox } from './svgSanitizer'
@@ -108,7 +108,7 @@ export function buildCoverSvg(o: {
   ]
 
   const body = [
-    `<rect width="${ctx.W}" height="${ctx.H}" fill="url(#bg)"/>`,
+    ...backgroundLayers(state, ctx),
     `<rect width="${ctx.W}" height="${ctx.H}" fill="url(#hl)"/>`,
     `<rect width="${ctx.W}" height="${ctx.H}" fill="url(#vig)"/>`,
     // 图元按图层顺序绘制：数组靠后者在上层，内置元素与自定义元素共用同一次序
@@ -120,6 +120,24 @@ export function buildCoverSvg(o: {
   return `<svg width="${ctx.W}" height="${ctx.H}" viewBox="0 0 ${ctx.W} ${ctx.H}" ` +
     `fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">\n` +
     `<defs>${defs.join('')}</defs>\n${body.filter(Boolean).join('\n')}\n</svg>`
+}
+
+/**
+ * 背景层。
+ *
+ * 渐变模式铺一层线性渐变;图片模式铺背景图后按用户设定压一层黑色遮罩——
+ * 照片明暗不可控,不压暗时白色标题经常读不出来。背景图 slice 铺满画布,
+ * 与自定义图片元素走同一条内嵌边界(只接受 dataURL,导出不依赖外链)。
+ */
+function backgroundLayers(state: CoverState, ctx: Ctx): string[] {
+  if (state.backgroundMode !== 'image' || !state.backgroundImage) {
+    return [`<rect width="${ctx.W}" height="${ctx.H}" fill="url(#bg)"/>`]
+  }
+  const image = `<image href="${esc(state.backgroundImage)}" xlink:href="${esc(state.backgroundImage)}" ` +
+    `x="0" y="0" width="${ctx.W}" height="${ctx.H}" preserveAspectRatio="xMidYMid slice"/>`
+  const scrim = normalizeBackgroundScrim(state.backgroundScrim)
+  if (scrim <= 0) return [image]
+  return [image, `<rect width="${ctx.W}" height="${ctx.H}" fill="#000" opacity="${r2(scrim / 100)}"/>`]
 }
 
 /** 按 layers 顺序产出图元；顺序表中缺失的元素补画在末尾，避免旧档升级后元素消失 */

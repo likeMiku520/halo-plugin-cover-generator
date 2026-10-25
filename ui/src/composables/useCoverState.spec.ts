@@ -451,4 +451,46 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
     }))
     expect(useCoverState().value.customElements).toEqual([])
   })
+
+  describe('背景字段（旧档补齐与信任边界）', () => {
+    it('旧档无背景字段时补为渐变 + 空图 + 默认压暗', () => {
+      localStorage.setItem(KEY, legacyArchive())
+      const s = useCoverState()
+      expect(s.value.backgroundMode).toBe('gradient')
+      expect(s.value.backgroundImage).toBeNull()
+      expect(s.value.backgroundScrim).toBe(20)
+    })
+
+    it('背景图只接受 data:image/*：外链背景被就地丢弃,其余字段保留', () => {
+      localStorage.setItem(KEY, legacyArchive({
+        backgroundMode: 'image', backgroundImage: 'https://evil.example/x.png', watermark: 'kept.com',
+      }))
+      const s = useCoverState()
+      expect(s.value.backgroundImage).toBeNull()
+      // 不变式：image 模式必有图，缺图即回落渐变
+      expect(s.value.backgroundMode).toBe('gradient')
+      expect(s.value.watermark).toBe('kept.com')
+    })
+
+    it('合法的内嵌背景图与压暗值原样保留', () => {
+      localStorage.setItem(KEY, legacyArchive({
+        backgroundMode: 'image', backgroundImage: 'data:image/png;base64,AAA', backgroundScrim: 45,
+      }))
+      const s = useCoverState()
+      expect(s.value.backgroundMode).toBe('image')
+      expect(s.value.backgroundImage).toBe('data:image/png;base64,AAA')
+      expect(s.value.backgroundScrim).toBe(45)
+    })
+
+    it('越界或非法的压暗值收敛进 0–60', () => {
+      localStorage.setItem(KEY, legacyArchive({ backgroundScrim: 999 }))
+      expect(useCoverState().value.backgroundScrim).toBe(60)
+
+      localStorage.setItem(KEY, legacyArchive({ backgroundScrim: -20 }))
+      expect(useCoverState().value.backgroundScrim).toBe(0)
+
+      localStorage.setItem(KEY, legacyArchive({ backgroundScrim: 'x' }))
+      expect(useCoverState().value.backgroundScrim).toBe(20)
+    })
+  })
 })

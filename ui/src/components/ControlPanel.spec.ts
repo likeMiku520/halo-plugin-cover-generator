@@ -152,3 +152,49 @@ describe('ControlPanel 标题字号单一入口(内容区滑块已移除)', () =
     wrapper.unmount()
   })
 })
+
+describe('ControlPanel 背景模式', () => {
+  it('默认渐变:渲染渐变选择器,背景图入口不出现(只剩 Logo 那一个附件输入)', () => {
+    const wrapper = mountPanel()
+    expect(wrapper.findComponent({ name: 'GradientPicker' }).exists()).toBe(true)
+    expect(wrapper.findAll('[data-formkit="attachment"]')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('图片模式:渐变选择器让位,出现背景图入口与压暗滑杆', () => {
+    const wrapper = mountPanel({
+      ...baseState,
+      backgroundMode: 'image',
+      backgroundImage: 'data:image/png;base64,AAA',
+    })
+    expect(wrapper.findComponent({ name: 'GradientPicker' }).exists()).toBe(false)
+    expect(wrapper.findAll('[data-formkit="attachment"]')).toHaveLength(2)
+    expect(wrapper.text()).toContain('压暗')
+    wrapper.unmount()
+  })
+
+  it('点击「图片」上抛 backgroundMode 变更', async () => {
+    const wrapper = mountPanel()
+    const seg = wrapper.find('[aria-label="背景模式"]')
+    await seg.findAll('button').find((b) => b.text() === '图片')!.trigger('click')
+
+    const last = wrapper.emitted('update:modelValue')!.at(-1)![0] as CoverState
+    expect(last.backgroundMode).toBe('image')
+    wrapper.unmount()
+  })
+
+  it('切回渐变只改模式,已选背景图保留在状态里(再次切回不必重选)', async () => {
+    const wrapper = mountPanel({
+      ...baseState,
+      backgroundMode: 'image',
+      backgroundImage: 'data:image/png;base64,AAA',
+    })
+    const seg = wrapper.find('[aria-label="背景模式"]')
+    await seg.findAll('button').find((b) => b.text() === '渐变')!.trigger('click')
+
+    const last = wrapper.emitted('update:modelValue')!.at(-1)![0] as CoverState
+    expect(last.backgroundMode).toBe('gradient')
+    expect(last.backgroundImage).toBe('data:image/png;base64,AAA')
+    wrapper.unmount()
+  })
+})

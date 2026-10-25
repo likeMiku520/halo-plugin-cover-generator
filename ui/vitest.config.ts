@@ -15,6 +15,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     exclude: [...configDefaults.exclude, 'e2e/**'],
+    // 全局装配:把宿主提供的 FormKit 换成替身(见 test-stubs/setup.ts)
+    setupFiles: [fileURLToPath(new URL('./src/test-stubs/setup.ts', import.meta.url))],
     // @halo-dev/components 以 bare import 引宿主模块 @vueuse/core(见 test-stubs),
     // 须内联进 vitest 转换管线,别名解析才能对其生效
     server: {

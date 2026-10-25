@@ -506,3 +506,47 @@ describe('自定义 svg 图标的颜色解析', () => {
     expect(svg).not.toContain('color="#39C5BB"')
   })
 })
+
+describe('背景模式', () => {
+  const IMAGE = 'data:image/png;base64,AAAA'
+
+  it('渐变模式铺线性渐变,不出现背景图元素', () => {
+    const svg = buildCoverSvg({
+      state: { ...state, backgroundMode: 'gradient' }, font: null, defaultLogoDataUrl: '',
+    })
+    expect(svg).toContain('fill="url(#bg)"')
+    expect(svg).not.toContain('<image')
+  })
+
+  it('图片模式铺背景图,遮罩压在图片之上(否则起不到压暗作用)', () => {
+    const svg = buildCoverSvg({
+      state: { ...state, backgroundMode: 'image', backgroundImage: IMAGE, backgroundScrim: 30 },
+      font: null,
+      defaultLogoDataUrl: '',
+    })
+    expect(svg).toContain(`href="${IMAGE}"`)
+    expect(svg).toContain('preserveAspectRatio="xMidYMid slice"')
+    expect(svg).not.toContain('fill="url(#bg)"')
+    expect(svg.indexOf('fill="#000" opacity="0.3"')).toBeGreaterThan(svg.indexOf('<image'))
+  })
+
+  it('压暗为 0 时不产出遮罩层', () => {
+    const svg = buildCoverSvg({
+      state: { ...state, backgroundMode: 'image', backgroundImage: IMAGE, backgroundScrim: 0 },
+      font: null,
+      defaultLogoDataUrl: '',
+    })
+    expect(svg).toContain('<image')
+    expect(svg).not.toContain('fill="#000" opacity="0"')
+  })
+
+  it('图片模式缺图时回退渐变,不产出空背景', () => {
+    const svg = buildCoverSvg({
+      state: { ...state, backgroundMode: 'image', backgroundImage: null },
+      font: null,
+      defaultLogoDataUrl: '',
+    })
+    expect(svg).toContain('fill="url(#bg)"')
+    expect(svg).not.toContain('<image')
+  })
+})

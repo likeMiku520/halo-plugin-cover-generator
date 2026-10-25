@@ -5,7 +5,7 @@ import { PRESETS } from '../lib/presets'
 import { splitTitle } from '../lib/splitTitle'
 import {
   CANVAS, REF_H, REF_W, defaultAnchors, defaultCoverState, defaultLayers,
-  isValidCanvasSize, normalizeAnchor, normalizeCanvasSize, normalizeSeamGap,
+  isValidCanvasSize, normalizeAnchor, normalizeBackgroundScrim, normalizeCanvasSize, normalizeSeamGap,
 } from '../lib/layout'
 
 /** 工作台状态存档键;CoverWorkbench 需同名键判断「是否存在存档」(archive-wins 播种门槛) */
@@ -162,6 +162,35 @@ function repairNewFields(
     repaired = true
   } else {
     merged.seamGap = normalizeSeamGap(raw.seamGap)
+  }
+  // 背景三字段旧档必然缺失。背景图只接受 data:image/*(与 Logo 同一条信任边界:
+  // 放行外链会破坏「导出 SVG 自包含」),非法值就地回落为渐变而不是整档丢弃,
+  // 并维持「image 模式必有背景图」这一不变式。
+  if (raw.backgroundMode !== 'gradient' && raw.backgroundMode !== 'image') {
+    merged.backgroundMode = 'gradient'
+    repaired = true
+  }
+  const rawBgImage = raw.backgroundImage
+  if (rawBgImage === undefined) {
+    merged.backgroundImage = null
+    repaired = true
+  } else if (rawBgImage === null) {
+    merged.backgroundImage = null
+  } else if (typeof rawBgImage === 'string' && /^data:image\//i.test(rawBgImage)) {
+    merged.backgroundImage = rawBgImage
+  } else {
+    merged.backgroundImage = null
+    repaired = true
+  }
+  if (typeof raw.backgroundScrim !== 'number' || !Number.isFinite(raw.backgroundScrim)) {
+    merged.backgroundScrim = CANVAS.BACKGROUND_SCRIM
+    repaired = true
+  } else {
+    merged.backgroundScrim = normalizeBackgroundScrim(raw.backgroundScrim)
+  }
+  if (merged.backgroundMode === 'image' && !merged.backgroundImage) {
+    merged.backgroundMode = 'gradient'
+    repaired = true
   }
   // 图层顺序先收敛为已知键并去重，再补上缺失项（新增元素、旧档无该字段）。
 // 不去重会让同一元素被绘制两次（存档可被手工编辑，属于不可信输入）

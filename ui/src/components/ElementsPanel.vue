@@ -4,12 +4,11 @@ import { FormKit } from '@formkit/vue'
 import type { AnchorKey, CoverState, CustomElement, CustomKind, LayerKey } from '../lib/types'
 import { defaultAnchors, normalizeAnchor } from '../lib/layout'
 import { anchorLabel, type SelectionId } from '../composables/useCanvasInteraction'
-import { fetchLogoAsDataUrl, fetchAttachmentAsDataUrl, validateLogoUrl } from '../lib/logoFetcher'
+import { fetchLogoAsDataUrl, validateLogoUrl } from '../lib/logoFetcher'
 import { sanitizeSvgMarkup } from '../lib/svgSanitizer'
 import { HEX6, firstMarkupColor, recolorSvgMarkup } from '../lib/svgColor'
+import { fetchIconSvg } from '../lib/iconFetch'
 import { MAX_CUSTOM_ELEMENTS } from '../composables/useCoverState'
-import type { AttachmentSummary } from '../api/haloClient'
-import AttachmentPicker from './AttachmentPicker.vue'
 import SliderField from './SliderField.vue'
 
 /**
@@ -134,6 +133,8 @@ function resetLayout() {
 
 const addKind = ref<CustomKind>('text')
 const elementError = ref('')
+/** 第三方外发披露:图片外链跨域走了公共代理时置位(与 Logo 导入同一条原则) */
+const elementNotice = ref(false)
 const busy = ref(false)
 const svgInput = ref('')
 const svgUrl = ref('')
@@ -240,15 +241,22 @@ async function addImageFromUrl() {
 }
 
 /**
- * 从博客附件选图:与上传同一条边界(取回后内嵌为 dataURL),
- * 入档形态与本地文件上传完全一致,渲染与导出无需区分来源。
+ * 从 Halo 内置的附件输入取图。
+ *
+ * 该输入的值为 URL 字符串(站内附件是 permalink,也可能是在它里面粘贴的外链);
+ * 仍要取回并内嵌为 dataURL,入档形态与本地文件上传完全一致,渲染与导出
+ * 无需区分来源。外链跨域时走与 Logo 导入同一条代理兜底,并显式披露第三方外发。
  */
-async function onPickAttachmentImage(attachment: AttachmentSummary) {
-  if (busy.value || !canAdd.value) return
+async function onPickAttachmentImage(value: unknown) {
+  const link = typeof value === 'string' ? value.trim() : ''
+  if (!link || busy.value || !canAdd.value) return
   busy.value = true
   elementError.value = ''
+  elementNotice.value = false
   try {
-    appendElement(newElement('image', { content: await fetchAttachmentAsDataUrl(attachment.link) }))
+    appendElement(newElement('image', {
+      content: await fetchLogoAsDataUrl(link, () => { elementNotice.value = true }),
+    }))
   } catch (e) {
     elementError.value = e instanceof Error ? e.message : '附件读取失败'
   } finally {
@@ -263,7 +271,10 @@ function useSvgMarkup(raw: string, patch: Partial<CustomElement> = {}) {
     elementError.value = result.reason
     return false
   }
-  appendElement(newElement('svg', { content: result.markup, size: 120, ...patch }))
+  // 粘贴/上传的标记常把颜色写死在 fill/stroke 上:取回它作为元素颜色,
+  // 详情里的取色器才与实际画面一致,后续改色也才有旧色可替换
+  const color = firstMarkupColor(result.markup) || '#ffffff'
+  appendElement(newElement('svg', { content: result.markup, size: 120, color, ...patch }))
   return true
 }
 
@@ -312,9 +323,8 @@ async function addSvgFromUrl() {
  * Halo 内置 Iconify 选择器的回填形态。
  *
  * 未开 valueOnly 时回填该对象(halo 2.26 的 formkit/inputs/iconify/types.ts 里
- * 的 IconifyValue):value 是取回的 SVG 标记、color 是确认面板里取的色。
- * 这里按结构声明而不 import 该类型——它只存在于 Halo 应用源码中,
- * 不在任何可导入的包内。
+ * 的 IconifyValue);这里按结构声明而不 import 该类型——它只存在于 Halo 应用
+ * 源码中,不在任何可导入的包内。
  */
 interface IconifyPick {
   value?: string
@@ -323,25 +333,39 @@ interface IconifyPick {
   color?: string
 }
 
-/** 图标选择器回填:取回的颜色改写为 currentColor,颜色从此只由渲染期解析 */
-function onIconPicked(pick: unknown) {
+/**
+ * 图标选择器回填。
+ *
+ * 选择器开的是 `format: "name"`,回填的是图标名(`mdi:home`)而不是标记:
+ * 内置的 `format: "svg"` 路径会在确认时按冒号地址下载标记并必然 404
+ * (halo 2.26 的 IconConfirmPanel.handleConfirm),所以标记改由这里按正确地址取回。
+ * 取回时不带颜色,得到 currentColor 形态,颜色只作为元素状态存在。
+ */
+async function onIconPicked(pick: unknown) {
   const icon = (typeof pick === 'string' ? { value: pick } : pick) as IconifyPick | null
-  const raw = icon?.value?.trim()
-  if (!raw) return
-  const result = sanitizeSvgMarkup(raw)
-  if (!result.ok) {
-    elementError.value = `该图标无法使用:${result.reason}`
-    return
+  const name = (icon?.value || icon?.name || '').trim()
+  if (!name) return
+  busy.value = true
+  elementError.value = ''
+  try {
+    const result = sanitizeSvgMarkup(await fetchIconSvg(name))
+    if (!result.ok) {
+      elementError.value = `该图标无法使用:${result.reason}`
+      return
+    }
+    const picked = icon?.color?.trim() ?? ''
+    appendElement(
+      newElement('svg', {
+        content: result.markup,
+        size: 120,
+        color: HEX6.test(picked) ? picked : '#ffffff',
+      }),
+    )
+  } catch (e) {
+    elementError.value = e instanceof Error ? e.message : '图标下载失败'
+  } finally {
+    busy.value = false
   }
-  const picked = icon?.color?.trim() ?? ''
-  const color = HEX6.test(picked) ? picked : firstMarkupColor(result.markup) || '#ffffff'
-  appendElement(
-    newElement('svg', {
-      content: recolorSvgMarkup(result.markup, color, 'currentColor'),
-      size: 120,
-      color,
-    }),
-  )
 }
 
 function sizeRange(kind: CustomKind): { min: number; max: number } {
@@ -541,12 +565,12 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
           <button type="button" class="sd-btn-quiet" :disabled="busy || !canAdd" @click="addImageFromUrl">导入</button>
         </div>
         <div class="picker-slot">
-          <AttachmentPicker @pick="onPickAttachmentImage" />
+          <FormKit type="attachment" :accepts="['image/*']" @input="onPickAttachmentImage" />
         </div>
       </template>
 
       <template v-else>
-        <FormKit type="iconify" format="svg" @input="onIconPicked" />
+        <FormKit type="iconify" format="name" @input="onIconPicked" />
         <button type="button" class="sd-btn-ghost source-toggle" @click="showSvgSource = !showSvgSource">
           {{ showSvgSource ? '收起手写 SVG' : '手写 / 上传 SVG' }}
         </button>
@@ -579,6 +603,9 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
         </template>
       </template>
 
+      <p v-if="elementNotice" class="hint" role="status">
+        已通过公共代理 wsrv.nl 获取:该图片链接已发送给第三方服务
+      </p>
       <p v-if="elementError" class="err">{{ elementError }}</p>
       <p v-if="!canAdd" class="hint">已达 {{ MAX_CUSTOM_ELEMENTS }} 个上限，删除后可继续添加</p>
     </div>

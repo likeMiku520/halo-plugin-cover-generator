@@ -1,12 +1,12 @@
 import { ref, watch, onScopeDispose } from 'vue'
 import type { Ref } from 'vue'
 import type { Anchor, AnchorMap, CoverState, CustomElement, CustomKind, LayerKey, TextStyleMap, TextTarget, TitleMode } from '../lib/types'
-import { PRESETS } from '../lib/presets'
+import { DEFAULT_PRESET } from '../lib/presets'
 import { splitTitle } from '../lib/splitTitle'
 import {
   CANVAS, REF_H, REF_W, defaultAnchors, defaultCoverState, defaultLayers, defaultTextStyles,
   isValidCanvasSize, normalizeAnchor, normalizeBackgroundScrim, normalizeCanvasSize,
-  normalizeSeamGap, normalizeTextStyle,
+  normalizeRotation, normalizeSeamGap, normalizeTextStyle,
 } from '../lib/layout'
 
 /** 工作台状态存档键;CoverWorkbench 需同名键判断「是否存在存档」(archive-wins 播种门槛) */
@@ -22,14 +22,9 @@ const PERSIST_FAILED_MESSAGE = '本地存档保存失败(存储空间不足或�
 export const MAX_CUSTOM_ELEMENTS = 12
 
 function defaults(): CoverState {
-  // 默认渐变沿用「日落橙」(参考图同款),其余默认值集中在 layout.ts,
+  // 全部默认值集中在 layout.ts（含默认渐变 = 海洋组的薄荷），
   // 保证渲染基准与状态初值只有一个来源
-  const base = defaultCoverState()
-  return {
-    ...base,
-    gradient: { angle: PRESETS[0].angle, stops: PRESETS[0].stops.map((s) => ({ ...s })) },
-    presetId: PRESETS[0].id,
-  }
+  return defaultCoverState()
 }
 
 /** 迁移迭代 2 之前的旧档：单框 title 按宽度中点拆为左右两段 */
@@ -152,7 +147,12 @@ function repairNewFields(
   } else {
     const kept = rawElements.filter(isValidCustomElement).slice(0, MAX_CUSTOM_ELEMENTS)
     if (kept.length !== rawElements.length) repaired = true
-    merged.customElements = kept.map((e) => ({ ...e, anchor: normalizeAnchor(e.anchor) }))
+    merged.customElements = kept.map((e) => ({
+      ...e,
+      anchor: normalizeAnchor(e.anchor),
+      // rotation 是后加字段：旧档必然缺失，缺失时补 0 而不是把整条元素判为非法
+      rotation: normalizeRotation(e.rotation),
+    }))
     customIds = kept.map((e) => e.id)
   }
   // 两种排版的文本各自独立：旧档没有 titleFlow 字段，迁移时用当前左右两段填充一次，
@@ -262,8 +262,8 @@ function load(): { state: CoverState; migrated: boolean } {
 function normalize(merged: CoverState): boolean {
   let repaired = false
   if (merged.gradient.stops.length < 2) {
-    merged.gradient = { angle: PRESETS[0].angle, stops: PRESETS[0].stops.map((s) => ({ ...s })) }
-    merged.presetId = PRESETS[0].id
+    merged.gradient = { angle: DEFAULT_PRESET.angle, stops: DEFAULT_PRESET.stops.map((s) => ({ ...s })) }
+    merged.presetId = DEFAULT_PRESET.id
     repaired = true
   } else {
     const angle = ((merged.gradient.angle % 360) + 360) % 360

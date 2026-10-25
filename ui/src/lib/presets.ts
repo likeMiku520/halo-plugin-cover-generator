@@ -44,3 +44,10 @@ export const PRESETS: GradientPreset[] = [
   p('evening', '晚霞', '清新', 135, [[0, '#667eea'], [100, '#764ba2']]),
   p('candy', '糖果', '清新', 315, [[0, '#D4FFEC'], [48, '#57F2CC'], [100, '#4596FB']]),
 ]
+
+/**
+ * 默认背景：海洋组第三个（薄荷）。
+ * defaultCoverState 与「存档里的渐变不合法」的修复路径共用这一份，
+ * 两处各自写死 id 迟早会漂移。
+ */
+export const DEFAULT_PRESET: GradientPreset = PRESETS.find((p) => p.id === 'mint') ?? PRESETS[0]

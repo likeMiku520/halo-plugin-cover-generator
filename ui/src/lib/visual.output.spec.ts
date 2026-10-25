@@ -58,19 +58,19 @@ describe.skipIf(!existsSync(FONT_PATH))('视觉快照产物', () => {
           {
             id: 't1', kind: 'text', content: '', text: '文字元素',
             size: 40, anchor: { x: 0.5, y: 0.16, scale: 1 },
-            color: '#39c5bb', bold: true, tracking: 0.1,
+            color: '#39c5bb', bold: true, tracking: 0.1, rotation: 0,
           },
           {
             id: 'i1', kind: 'image', content: LOGO, text: '',
             size: 90, anchor: { x: 0.12, y: 0.84, scale: 1 },
-            color: '#ffffff', bold: false, tracking: 0,
+            color: '#ffffff', bold: false, tracking: 0, rotation: 0,
           },
           {
             id: 's1', kind: 'svg',
             content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 24">' +
               '<rect width="48" height="24" rx="4" fill="#ffffff"/></svg>',
             text: '', size: 120, anchor: { x: 0.88, y: 0.84, scale: 1 },
-            color: '#ffffff', bold: false, tracking: 0,
+            color: '#ffffff', bold: false, tracking: 0, rotation: 0,
           },
         ],
       }),

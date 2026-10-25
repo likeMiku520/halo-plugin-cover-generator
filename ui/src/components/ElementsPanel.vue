@@ -2,13 +2,15 @@
 import { computed, ref } from 'vue'
 import { FormKit } from '@formkit/vue'
 import type { AnchorKey, CoverState, CustomElement, CustomKind, LayerKey } from '../lib/types'
-import { defaultAnchors, normalizeAnchor } from '../lib/layout'
+import {
+  CANVAS, REF_H, REF_W, TEXT_STYLE_LIMITS, defaultAnchors, defaultCoverState, defaultTextStyles,
+  normalizeAnchor,
+} from '../lib/layout'
 import { anchorLabel, type SelectionId } from '../composables/useCanvasInteraction'
-import { fetchLogoAsDataUrl, validateLogoUrl } from '../lib/logoFetcher'
+import { fetchLogoAsDataUrl } from '../lib/logoFetcher'
 import { sanitizeSvgMarkup } from '../lib/svgSanitizer'
 import { HEX6, firstMarkupColor, recolorSvgMarkup } from '../lib/svgColor'
 import { fetchIconSvg } from '../lib/iconFetch'
-import { TEXT_STYLE_LIMITS } from '../lib/layout'
 import { MAX_CUSTOM_ELEMENTS } from '../composables/useCoverState'
 import type { TextStyle, TextTarget } from '../lib/types'
 import SliderField from './SliderField.vue'
@@ -128,6 +130,16 @@ function updateTextStyle(patch: Partial<TextStyle>) {
   })
 }
 
+/**
+ * 「大小(%)」的取值范围按元素区分：副标题与水印都从 1% 起（用户要求能调到极小），
+ * 水印上限 300%；其余（Logo / 自定义文字）维持 20–300 不变。
+ */
+const scaleRange = computed(() => {
+  if (props.selected === 'subtitle') return { min: 1, max: 100 }
+  if (props.selected === 'watermark') return { min: 1, max: 300 }
+  return { min: 20, max: 300 }
+})
+
 const canMoveUp = computed(() =>
   activeLayerIndex.value >= 0 && activeLayerIndex.value < props.modelValue.layers.length - 1)
 const canMoveDown = computed(() => activeLayerIndex.value > 0)
@@ -143,13 +155,35 @@ function moveLayer(delta: number) {
   set({ layers: list })
 }
 
-/** 重置位置与大小：自定义元素的位置一并归位，但保留其内容与层级 */
+/** 重置位置：只把锚点归位，大小与排版样式不动 */
 function resetLayout() {
   set({
     layout: defaultAnchors(),
     customElements: props.modelValue.customElements.map((el) => ({
       ...el,
       anchor: { x: 0.5, y: 0.5, scale: 1 },
+    })),
+  })
+}
+
+/**
+ * 重置全部数值：与「重置位置」区分——分辨率、位置、大小、字号、字距、弯曲、
+ * 旋转、方向、压暗、中缝全部回到出厂值，但保留已输入的文字、图片、渐变与层级。
+ * （用户要求单独一个按钮，且重置后每个数值框里都是干净整数）
+ */
+function resetAllValues() {
+  set({
+    canvas: { width: REF_W, height: REF_H },
+    layout: defaultAnchors(),
+    titleFontSize: defaultCoverState().titleFontSize,
+    seamGap: CANVAS.SEAM_GAP,
+    textStyles: defaultTextStyles(),
+    backgroundScrim: CANVAS.BACKGROUND_SCRIM,
+    customElements: props.modelValue.customElements.map((el) => ({
+      ...el,
+      anchor: { x: 0.5, y: 0.5, scale: 1 },
+      size: DEFAULT_ELEMENT_SIZE[el.kind],
+      rotation: 0,
     })),
   })
 }
@@ -161,11 +195,6 @@ const elementError = ref('')
 /** 第三方外发披露:图片外链跨域走了公共代理时置位(与 Logo 导入同一条原则) */
 const elementNotice = ref(false)
 const busy = ref(false)
-const svgInput = ref('')
-const svgUrl = ref('')
-const imageUrl = ref('')
-const showSvgSource = ref(false)
-const fileInput = ref<HTMLInputElement>()
 
 let seq = 0
 function nextId(): string {
@@ -173,17 +202,21 @@ function nextId(): string {
   return `ce${Date.now().toString(36)}${seq}`
 }
 
+/** 自定义元素出厂尺寸：文字按字号、图形按边长；录入与「重置全部数值」共用一份 */
+const DEFAULT_ELEMENT_SIZE: Record<CustomKind, number> = { text: 48, image: 160, svg: 160 }
+
 function newElement(kind: CustomKind, patch: Partial<CustomElement> = {}): CustomElement {
   return {
     id: nextId(),
     kind,
     content: '',
     text: kind === 'text' ? '点击下方可编辑文字' : '',
-    size: kind === 'text' ? 48 : 160,
+    size: DEFAULT_ELEMENT_SIZE[kind],
     anchor: { x: 0.5, y: 0.5, scale: 1 },
     color: '#ffffff',
     bold: true,
     tracking: 0,
+    rotation: 0,
     ...patch,
   }
 }
@@ -213,55 +246,9 @@ function removeElement(id: string) {
 
 const canAdd = computed(() => props.modelValue.customElements.length < MAX_CUSTOM_ELEMENTS)
 
-function readAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(new Error('文件读取失败，请重试'))
-    reader.readAsDataURL(file)
-  })
-}
-
 function addText() {
   if (!canAdd.value) return
   appendElement(newElement('text'))
-}
-
-function onPickImageFile(ev: Event) {
-  const input = ev.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
-  if (!file.type.startsWith('image/')) {
-    elementError.value = '仅支持图片文件'
-    return
-  }
-  if (file.size > 2 * 1024 * 1024) {
-    elementError.value = '图片不能超过 2 MB'
-    return
-  }
-  void readAsDataUrl(file)
-    .then((dataUrl) => appendElement(newElement('image', { content: dataUrl })))
-    .catch((e: unknown) => { elementError.value = e instanceof Error ? e.message : '图片读取失败' })
-}
-
-async function addImageFromUrl() {
-  if (busy.value) return
-  const invalid = validateLogoUrl(imageUrl.value)
-  if (invalid) {
-    elementError.value = invalid
-    return
-  }
-  busy.value = true
-  elementError.value = ''
-  try {
-    appendElement(newElement('image', { content: await fetchLogoAsDataUrl(imageUrl.value.trim()) }))
-    imageUrl.value = ''
-  } catch (e) {
-    elementError.value = e instanceof Error ? e.message : '导入失败'
-  } finally {
-    busy.value = false
-  }
 }
 
 /**
@@ -318,29 +305,9 @@ function onPickSvgFile(ev: Event) {
   input.value = ''
   if (!file) return
   const reader = new FileReader()
-  reader.onload = () => { if (useSvgMarkup(String(reader.result))) svgInput.value = '' }
+  reader.onload = () => { useSvgMarkup(String(reader.result)) }
   reader.onerror = () => { elementError.value = '文件读取失败，请重试' }
   reader.readAsText(file)
-}
-
-async function addSvgFromUrl() {
-  if (busy.value) return
-  const url = svgUrl.value.trim()
-  if (!/^https?:\/\//i.test(url)) {
-    elementError.value = '链接需以 http(s):// 开头'
-    return
-  }
-  busy.value = true
-  elementError.value = ''
-  try {
-    const res = await fetch(url, { mode: 'cors' })
-    if (!res.ok) throw new Error(`下载失败：HTTP ${res.status}`)
-    if (useSvgMarkup(await res.text())) svgUrl.value = ''
-  } catch (e) {
-    elementError.value = e instanceof Error ? e.message : 'SVG 导入失败'
-  } finally {
-    busy.value = false
-  }
 }
 
 /**
@@ -403,6 +370,7 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
       <b>元素</b>
       <span class="spacer"></span>
       <button type="button" class="sd-btn-quiet" @click="resetLayout">重置位置</button>
+      <button type="button" class="sd-btn-quiet" @click="resetAllValues">重置全部数值</button>
     </div>
     <p class="hint">点元素名选中，方向键微调（Shift 加速）</p>
 
@@ -467,16 +435,16 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
         <div class="sliders">
           <SliderField
             :model-value="Math.round(activeAnchor.x * 100)"
-            :min="2"
-            :max="98"
+            :min="0"
+            :max="100"
             label="水平"
             suffix="%"
             @update:model-value="setAnchor(selected, { x: $event / 100 })"
           />
           <SliderField
             :model-value="Math.round(activeAnchor.y * 100)"
-            :min="3"
-            :max="97"
+            :min="0"
+            :max="100"
             label="垂直"
             suffix="%"
             @update:model-value="setAnchor(selected, { y: $event / 100 })"
@@ -493,9 +461,9 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
           <SliderField
             v-else-if="!activeElement || activeElement.kind === 'text'"
             :model-value="Math.round(activeAnchor.scale * 100)"
-            :min="20"
-            :max="300"
-            :step="5"
+            :min="scaleRange.min"
+            :max="scaleRange.max"
+            :step="1"
             label="大小"
             suffix="%"
             @update:model-value="setAnchor(selected, { scale: $event / 100 })"
@@ -576,6 +544,18 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
               @update:model-value="updateElement(activeElement.id, { size: $event })"
             />
           </div>
+          <!-- 旋转对所有自定义元素通用：图片/SVG/文字都绕自身锚点转 -->
+          <div class="sub-row">
+            <SliderField
+              :model-value="activeElement.rotation"
+              :min="TEXT_STYLE_LIMITS.ROTATION_MIN"
+              :max="TEXT_STYLE_LIMITS.ROTATION_MAX"
+              :step="5"
+              label="旋转"
+              suffix="°"
+              @update:model-value="updateElement(activeElement.id, { rotation: $event })"
+            />
+          </div>
           <div class="row2">
             <label v-if="activeElement.kind !== 'image'" class="field">
               <span class="lb">颜色</span>
@@ -627,16 +607,6 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
       </template>
 
       <template v-else-if="addKind === 'image'">
-        <div class="add-row">
-          <button type="button" class="sd-btn-quiet grow" :disabled="!canAdd" @click="fileInput?.click()">
-            上传图片
-          </button>
-        </div>
-        <input ref="fileInput" class="hidden-file" type="file" accept="image/*" @change="onPickImageFile" />
-        <div class="url-row">
-          <input v-model="imageUrl" class="sd-field" placeholder="或粘贴图片直链 https://…" aria-label="图片直链" />
-          <button type="button" class="sd-btn-quiet" :disabled="busy || !canAdd" @click="addImageFromUrl">导入</button>
-        </div>
         <div class="picker-slot">
           <FormKit type="attachment" :accepts="['image/*']" @input="onPickAttachmentImage" />
         </div>
@@ -644,36 +614,12 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
 
       <template v-else>
         <FormKit type="iconify" format="name" @input="onIconPicked" />
-        <button type="button" class="sd-btn-ghost source-toggle" @click="showSvgSource = !showSvgSource">
-          {{ showSvgSource ? '收起手写 SVG' : '手写 / 上传 SVG' }}
-        </button>
-        <template v-if="showSvgSource">
-          <div class="url-row">
-            <label class="sd-btn-quiet upload">
-              选择 .svg 文件
-              <input class="hidden-file" type="file" accept=".svg,image/svg+xml" @change="onPickSvgFile" />
-            </label>
-          </div>
-          <textarea
-            v-model="svgInput"
-            class="sd-field svg-area"
-            rows="3"
-            placeholder="粘贴 SVG 源码，例如 &lt;svg viewBox=&quot;0 0 24 24&quot;&gt;…&lt;/svg&gt;"
-            aria-label="SVG 源码"
-          ></textarea>
-          <div class="url-row">
-            <input v-model="svgUrl" class="sd-field" placeholder="或 SVG 文件直链 https://…" aria-label="SVG 直链" />
-            <button type="button" class="sd-btn-quiet" :disabled="busy || !canAdd" @click="addSvgFromUrl">导入</button>
-          </div>
-          <button
-            type="button"
-            class="sd-btn-quiet wide"
-            :disabled="!svgInput.trim() || !canAdd"
-            @click="useSvgMarkup(svgInput) && (svgInput = '')"
-          >
-            添加粘贴的 SVG
-          </button>
-        </template>
+        <div class="url-row">
+          <label class="sd-btn-quiet upload">
+            选择 .svg 文件
+            <input class="hidden-file" type="file" accept=".svg,image/svg+xml" @change="onPickSvgFile" />
+          </label>
+        </div>
       </template>
 
       <p v-if="elementNotice" class="hint" role="status">
@@ -944,15 +890,6 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
   box-shadow: 0 0 0 3px var(--sd-focus-ring);
 }
 
-.add-row {
-  display: flex;
-  gap: 6px;
-}
-
-.grow {
-  flex: 1;
-}
-
 .wide {
   width: 100%;
 }
@@ -972,17 +909,5 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
   display: flex;
   gap: 8px;
   margin-top: 8px;
-}
-
-.svg-area {
-  margin-top: 8px;
-  font-family: var(--sd-font-mono);
-  font-size: var(--sd-fs-sm);
-  resize: vertical;
-}
-
-.source-toggle {
-  width: 100%;
-  margin-top: 10px;
 }
 </style>

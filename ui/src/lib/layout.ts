@@ -1,3 +1,4 @@
+import { DEFAULT_PRESET } from './presets'
 import type {
   Anchor, AnchorMap, CanvasSize, CoverState, LayerKey, TextTarget, TextStyle, TextStyleMap, TitleMode,
 } from './types'
@@ -38,9 +39,9 @@ export const CANVAS = {
   WM_MAX_FRACTION: 0.35,
   /** 自定义文字断行上限占画布宽的比例 */
   CUSTOM_TEXT_MAX_FRACTION: 0.75,
-  /** 锚点允许的取值边界，防止元素被拖出画布 */
-  MARGIN_X: 0.02,
-  MARGIN_Y: 0.03,
+  /** 锚点取值边界：0 表示不预留裁切保护，元素可以贴到画布边缘 */
+  MARGIN_X: 0,
+  MARGIN_Y: 0,
 } as const
 
 /** 副标题字距（em）与自定义元素默认字距基准 */
@@ -51,15 +52,15 @@ const anchor = (x: number, y: number, scale = 1): Anchor => ({ x, y, scale })
 
 /**
  * 默认锚点：整数百分比，重置后每个数值框里都是干净整数。
- * 取值贴近改造前 1200×630 的硬编码布局（原先 0.5238/0.5556 这类比值
- * 显示时被四舍五入，重置完看着是 52%/56%、实际存的却是小数，实机反馈）。
+ * 标题与 Logo 居中(50/50)、副标题落在 80% 高度、水印贴右下(95/95)；
+ * 副标题倍率 0.5 对应「大小 50%」，是它的出厂观感。
  */
 export function defaultAnchors(): AnchorMap {
   return {
-    logo: anchor(0.5, 0.52),
-    title: anchor(0.5, 0.56),
-    subtitle: anchor(0.5, 0.8),
-    watermark: anchor(0.96, 0.94),
+    logo: anchor(0.5, 0.5),
+    title: anchor(0.5, 0.5),
+    subtitle: anchor(0.5, 0.8, 0.5),
+    watermark: anchor(0.95, 0.95),
   }
 }
 
@@ -198,13 +199,15 @@ export function defaultCoverState(): CoverState {
   return {
     titleLeft: '',
     titleRight: '',
-    titleFlow: '',
+    // 出厂即整块排版，内容七个字(便于一眼看出换行与弯曲效果)
+    titleFlow: '标题只有七个字',
     seamGap: CANVAS.SEAM_GAP,
-    titleFontSize: CANVAS.TITLE_BASE,
-    titleMode: 'split',
+    // 标题大小滑杆显示的是相对 TITLE_BASE 的百分比，出厂 50%
+    titleFontSize: Math.round(CANVAS.TITLE_BASE / 2),
+    titleMode: 'flow',
     subtitle: '',
-    gradient: { angle: 120, stops: [{ offset: 0, color: '#f6d365' }, { offset: 100, color: '#fda085' }] },
-    presetId: null,
+    gradient: { angle: DEFAULT_PRESET.angle, stops: DEFAULT_PRESET.stops.map((s) => ({ ...s })) },
+    presetId: DEFAULT_PRESET.id,
     backgroundMode: 'gradient',
     backgroundImage: null,
     backgroundScrim: CANVAS.BACKGROUND_SCRIM,

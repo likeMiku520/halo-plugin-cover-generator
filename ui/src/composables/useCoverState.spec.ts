@@ -20,12 +20,17 @@ function legacyArchive(extra: Record<string, unknown> = {}) {
 describe('useCoverState', () => {
   beforeEach(() => localStorage.clear())
 
-  it('默认值为空标题 + 日落橙 + 默认 Logo 可见 + 字号 210', () => {
+  it('默认值为整块排版标题 + 薄荷渐变 + 默认 Logo 可见 + 字号 105(面板 50%)', () => {
     const s = useCoverState()
     expect(s.value.titleLeft).toBe('')
     expect(s.value.titleRight).toBe('')
-    expect(s.value.titleFontSize).toBe(210)
-    expect(s.value.gradient.stops[0].color).toBe('#f6d365')
+    // 出厂即整块排版：标题文本存在 titleFlow，分缝两段为空
+    expect(s.value.titleMode).toBe('flow')
+    expect(s.value.titleFlow).toBe('标题只有七个字')
+    expect(s.value.titleFontSize).toBe(105) // round(TITLE_BASE / 2)，面板显示 50%
+    expect(s.value.gradient.angle).toBe(340)
+    expect(s.value.gradient.stops[0].color).toBe('#00cdac')
+    expect(s.value.presetId).toBe('mint')
     expect(s.value.logoHidden).toBe(false)
     expect(s.value.watermark).toBe('')
   })
@@ -44,7 +49,7 @@ describe('useCoverState', () => {
     const s = useCoverState()
     expect(s.value.titleLeft).toBe('工具')
     expect(s.value.titleRight).toBe('推荐')
-    expect(s.value.titleFontSize).toBe(210)
+    expect(s.value.titleFontSize).toBe(105) // 旧档没有字号字段 ⇒ 用新出厂值(面板 50%)
     // 迁移结果立即落盘为新结构，不再残留旧字段
     const saved = JSON.parse(localStorage.getItem('halo-plugin-cover-generator/state/v1')!)
     expect(saved.titleLeft).toBe('工具')
@@ -102,7 +107,7 @@ describe('useCoverState', () => {
     localStorage.setItem('halo-plugin-cover-generator/state/v1', '{"gradient":null,"titleLeft":"标题"}')
     const s = useCoverState()
     expect(s.value.titleLeft).toBe('')
-    expect(s.value.gradient.stops[0].color).toBe('#f6d365')
+    expect(s.value.gradient.stops[0].color).toBe('#00cdac') // 整档回退 ⇒ 出厂薄荷
   })
   it('titleLeft 为数字时整体回退默认值', () => {
     localStorage.setItem('halo-plugin-cover-generator/state/v1', '{"titleLeft":123}')
@@ -119,7 +124,7 @@ describe('useCoverState', () => {
     )
     const s = useCoverState()
     expect(s.value.titleLeft).toBe('')
-    expect(s.value.gradient.stops[0].color).toBe('#f6d365')
+    expect(s.value.gradient.stops[0].color).toBe('#00cdac')
   })
   it('logoDataUrl 为外链 URI 时整体回退默认值(SVG 自包含承诺,评审Minor-M1)', () => {
     localStorage.setItem(
@@ -151,14 +156,14 @@ describe('useCoverState', () => {
     localStorage.setItem('halo-plugin-cover-generator/state/v1',
       '{"gradient":{"angle":"x","stops":[]},"titleLeft":"标题"}')
     const s = useCoverState()
-    expect(s.value.gradient.angle).toBe(120)
+    expect(s.value.gradient.angle).toBe(340) // 整体回退 ⇒ 出厂薄荷的 340
     expect(s.value.titleLeft).toBe('')
   })
   it('存档缺字段时用默认值补齐', () => {
     localStorage.setItem('halo-plugin-cover-generator/state/v1', JSON.stringify({ titleLeft: '只有标题' }))
     const s = useCoverState()
     expect(s.value.titleLeft).toBe('只有标题')
-    expect(s.value.gradient.stops[0].color).toBe('#f6d365')
+    expect(s.value.gradient.stops[0].color).toBe('#00cdac')
   })
   it('并发重复修改：两次实例交替写入，存档保持合法且为最后一次值', async () => {
     vi.useFakeTimers()
@@ -260,8 +265,8 @@ describe('useCoverState', () => {
     expect(s.value.watermark).toBe('w.com')
     // 渐变修复为默认预设(可渲染的合法渐变),选中态归位
     expect(s.value.gradient.stops.length).toBeGreaterThanOrEqual(2)
-    expect(s.value.gradient.stops[0].color).toBe('#f6d365')
-    expect(s.value.presetId).toBe('sunset')
+    expect(s.value.gradient.stops[0].color).toBe('#00cdac')
+    expect(s.value.presetId).toBe('mint')
     // 修复立即回写,不再残留损坏形态
     const saved = JSON.parse(localStorage.getItem('halo-plugin-cover-generator/state/v1')!)
     expect(saved.gradient.stops.length).toBeGreaterThanOrEqual(2)
@@ -290,7 +295,8 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
     const s = useCoverState()
     // 默认锚点等价于改造前的硬编码布局，老用户观感不变
     expect(s.value.layout).toEqual(defaultAnchors())
-    expect(s.value.titleMode).toBe('split')
+    // 旧档没有 titleMode：并入出厂默认(整块排版)，其旧文本由 titleFlow 迁移承接
+    expect(s.value.titleMode).toBe('flow')
     expect(s.value.customElements).toEqual([])
     // 不得因新增字段缺失而整档回退
     expect(s.value.titleLeft).toBe('工具')
@@ -303,7 +309,7 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
     useCoverState()
     const saved = JSON.parse(localStorage.getItem(KEY)!)
     expect(saved.layout).toBeDefined()
-    expect(saved.titleMode).toBe('split')
+    expect(saved.titleMode).toBe('flow')
     expect(saved.customElements).toEqual([])
   })
 
@@ -317,8 +323,9 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
       },
     }))
     const s = useCoverState()
-    expect(s.value.layout.logo.x).toBeGreaterThanOrEqual(0)
-    expect(s.value.layout.logo.y).toBeLessThanOrEqual(1)
+    // 边界不再预留裁切保护：越界值收敛到画布边缘(0/1)而不是 2%/3% 内缩
+    expect(s.value.layout.logo.x).toBe(0)
+    expect(s.value.layout.logo.y).toBe(1)
     expect(s.value.layout.logo.scale).toBeGreaterThan(0)
   })
 
@@ -350,6 +357,24 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
     }))
     const s = useCoverState()
     expect(s.value.customElements.map((e) => e.id)).toEqual(['a'])
+  })
+
+  it('旧档自定义元素缺 rotation 时补 0，越界角度收敛进 ±180 并回写', () => {
+    localStorage.setItem(KEY, legacyArchive({
+      customElements: [
+        // 旧档必然没有 rotation：补 0，而不是把整条元素判为非法
+        { id: 'legacy', kind: 'text', content: '', text: '旧', size: 40,
+          anchor: { x: 0.5, y: 0.5, scale: 1 }, color: '#ffffff', bold: false, tracking: 0, round: false },
+        { id: 'wild', kind: 'text', content: '', text: '野', size: 40,
+          anchor: { x: 0.5, y: 0.5, scale: 1 }, color: '#ffffff', bold: false, tracking: 0, rotation: 900 },
+      ],
+    }))
+    const s = useCoverState()
+    expect(s.value.customElements.map((e) => [e.id, e.rotation]))
+      .toEqual([['legacy', 0], ['wild', 180]])
+    // 补齐与收敛都要立即回写：下次读取时存档里已是合法角度
+    const saved = JSON.parse(localStorage.getItem(KEY)!)
+    expect(saved.customElements.map((e: { rotation: number }) => e.rotation)).toEqual([0, 180])
   })
 
   it('SVG 元素必须含 <svg> 标记，text 元素无此要求', () => {
@@ -535,7 +560,7 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
   })
 
   describe('默认位置（重置）取整数百分比', () => {
-    it('四个元素的默认锚点都是整百分比、大小为 100%', () => {
+    it('四个元素的默认锚点都是整百分比；副标题大小为 50%，其余 100%', () => {
       localStorage.clear()
       const s = useCoverState()
       for (const key of ['logo', 'title', 'subtitle', 'watermark'] as const) {
@@ -545,13 +570,17 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
         for (const v of [a.x, a.y]) {
           expect(Math.abs(v * 100 - Math.round(v * 100))).toBeLessThan(1e-9)
         }
-        expect(a.scale).toBe(1)
       }
-      // 重置后各元素落在哪里：与 1200×630 旧硬编码布局基本重合
-      expect(s.value.layout.logo).toMatchObject({ x: 0.5, y: 0.52 })
-      expect(s.value.layout.title).toMatchObject({ x: 0.5, y: 0.56 })
-      expect(s.value.layout.subtitle).toMatchObject({ x: 0.5, y: 0.8 })
-      expect(s.value.layout.watermark).toMatchObject({ x: 0.96, y: 0.94 })
+      // 副标题出厂倍率 0.5：面板「大小」显示 50%，这是它比标题小一号的来源
+      expect(s.value.layout.subtitle.scale).toBe(0.5)
+      for (const key of ['logo', 'title', 'watermark'] as const) {
+        expect(s.value.layout[key].scale).toBe(1)
+      }
+      // 重置后各元素落在哪里：标题与 Logo 居中，副标题 80% 高，水印贴右下
+      expect(s.value.layout.logo).toMatchObject({ x: 0.5, y: 0.5 })
+      expect(s.value.layout.title).toMatchObject({ x: 0.5, y: 0.5 })
+      expect(s.value.layout.subtitle).toMatchObject({ x: 0.5, y: 0.8, scale: 0.5 })
+      expect(s.value.layout.watermark).toMatchObject({ x: 0.95, y: 0.95 })
     })
   })
 })

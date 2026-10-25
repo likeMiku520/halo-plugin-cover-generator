@@ -213,7 +213,8 @@ describe('CoverWorkbench', () => {
 
     // 自定义 URL 优先于内置字体资产(模块边界断言加载入参)
     expect(vi.mocked(loadCoverFont)).toHaveBeenCalledWith('https://cdn.example.com/brand.otf')
-    await wrapper.find('input[aria-label="标题左段"]').setValue('标题')
+    // 出厂是整块排版：标题写在 titleFlow，canExport 才为真
+    await wrapper.find('input[aria-label="整块标题"]').setValue('标题')
     const svgBtn = wrapper.findAll('button').find((b) => b.text() === '下载 SVG')!
     expect(svgBtn.attributes('disabled')).toBeUndefined()
     wrapper.unmount()
@@ -259,7 +260,7 @@ describe('CoverWorkbench', () => {
     const previewProp = () => wrapper.findComponent(CoverPreview).props('svg') as string
     const before = previewProp()
 
-    await wrapper.find('input[aria-label="标题左段"]').setValue('防抖')
+    await wrapper.find('input[aria-label="整块标题"]').setValue('防抖')
     await nextTick()
     // 防抖窗口内:预览仍显示输入前的 SVG(逐字节相同)
     expect(previewProp()).toBe(before)
@@ -512,7 +513,8 @@ describe('CoverWorkbench', () => {
     } as unknown as Awaited<ReturnType<typeof loadCoverFont>>)
     const wrapper = mount(CoverWorkbench, { attachTo: document.body })
     await flushPromises()
-    const title = wrapper.find('input[aria-label="标题左段"]')
+    // 出厂默认整块排版，标题填 titleFlow 字段（分缝字段此时不在面板上）
+    const title = wrapper.find('input[aria-label="整块标题"]')
     await title.setValue('标题')
     // G1:预览渲染有 150ms 防抖;涉及「剪贴板内容 === 预览 SVG」逐字节比较的用例
     // 需等防抖合帧追平
@@ -781,7 +783,10 @@ describe('CoverWorkbench', () => {
     const wrapper = mount(CoverWorkbench, options as unknown as Parameters<typeof mount>[1])
     await flushPromises()
 
-    expect((wrapper.find('input[aria-label="标题左段"]').element as HTMLInputElement).value).toBe('')
+    // 无 query ⇒ 不触发播种：标题仍是出厂整块文本，也没有切到分缝模式
+    expect((wrapper.find('input[aria-label="整块标题"]').element as HTMLInputElement).value)
+      .toBe('标题只有七个字')
+    expect(wrapper.find('input[aria-label="标题左段"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

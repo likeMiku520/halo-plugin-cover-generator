@@ -481,11 +481,14 @@ function subTitleLayer(
   const textMax = vertical ? 0 : (fullMaxWidth(ctx) - 2 * (lineW + lineGap)) * ax.scale
   const trackPxOf = (sz: number) => sz * ts.tracking
   const mTracked = (t: string, sz: number) => measureTracked(measure, t, sz, trackPxOf(sz))
+  // 大小倍率必须作用到字号本身:此前只用它缩窄了可用宽度,滑杆拖到底字号也不变
+  // (实机反馈「副标题大小改了没效果」)
+  const subBase = byHeight(CANVAS.SUB_BASE, ctx.s) * ax.scale
+  const subMin = byHeight(CANVAS.SUB_MIN, ctx.s) * ax.scale
   // 竖排没有横向预算可言，字号直接取基准（大小仍由元素面板掌握）
   const { fontSize } = vertical
-    ? { fontSize: byHeight(CANVAS.SUB_BASE, ctx.s) }
-    : fitFontSize(sub, textMax,
-        { base: byHeight(CANVAS.SUB_BASE, ctx.s), min: byHeight(CANVAS.SUB_MIN, ctx.s) }, mTracked)
+    ? { fontSize: subBase }
+    : fitFontSize(sub, textMax, { base: subBase, min: subMin }, mTracked)
   const text = layoutRun(font, sub, cx, baseline, fontSize, trackPxOf(fontSize),
     '#ffffff', 'middle', true, textMax, layout)
   // 装饰线只在横排出现：竖排是一列字，两侧横线会横穿列身
@@ -564,16 +567,19 @@ function customElementLayer(
         font, line, x, firstBaseline + i * lineHeight, size, trackPx, el.color, 'middle', el.bold, maxW,
       ))
       .join('')
-    return `<g>${body}</g>`
+    return rotateAbout(`<g>${body}</g>`, el.rotation, x, y)
   }
 
   const size = customElementSize(el, ctx)
 
   if (el.kind === 'image') {
     if (!el.content) return ''
-    return `<image href="${esc(el.content)}" xlink:href="${esc(el.content)}" ` +
+    return rotateAbout(
+      `<image href="${esc(el.content)}" xlink:href="${esc(el.content)}" ` +
       `x="${r2(x - size / 2)}" y="${r2(y - size / 2)}" ` +
-      `width="${r2(size)}" height="${r2(size)}" preserveAspectRatio="xMidYMid slice"/>`
+      `width="${r2(size)}" height="${r2(size)}" preserveAspectRatio="xMidYMid slice"/>`,
+      el.rotation, x, y,
+    )
   }
 
   // svg 图标：录入时已过白名单；此处按 viewBox 等比缩放到目标尺寸，
@@ -587,6 +593,9 @@ function customElementLayer(
   const offsetY = -vy - vh / 2
   // color 是 color 属性的呈现属性,标记里的 currentColor 由它解析:
   // 图标按 currentColor 入库,颜色因此是渲染期输入,改色无需重取标记
-  return `<g color="${esc(el.color)}" transform="translate(${r2(x)} ${r2(y)}) scale(${r2(scale)}) ` +
-    `translate(${r2(offsetX)} ${r2(offsetY)})">${inner}</g>`
+  return rotateAbout(
+    `<g color="${esc(el.color)}" transform="translate(${r2(x)} ${r2(y)}) scale(${r2(scale)}) ` +
+    `translate(${r2(offsetX)} ${r2(offsetY)})">${inner}</g>`,
+    el.rotation, x, y,
+  )
 }

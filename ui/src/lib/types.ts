@@ -86,6 +86,8 @@ export interface CustomElement {
   bold: boolean
   /** 仅 text 使用：字距（em） */
   tracking: number
+  /** 旋转角度（-180–180，顺时针为正）：绕元素锚点旋转，所有类型通用 */
+  rotation: number
 }
 
 /** 封面全部可编辑状态 */

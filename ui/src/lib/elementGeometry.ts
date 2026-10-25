@@ -154,8 +154,8 @@ export function builtinBoxes(
   if (sub) {
     const a = normalizeAnchor(layout.subtitle)
     const st = textStyleOf(state, 'subtitle')
-    const base = byHeight(CANVAS.SUB_BASE, ctx.s)
-    const min = byHeight(CANVAS.SUB_MIN, ctx.s)
+    const base = byHeight(CANVAS.SUB_BASE, ctx.s) * a.scale
+    const min = byHeight(CANVAS.SUB_MIN, ctx.s) * a.scale
     const maxW = (ctx.W * CANVAS.FULL_MAX_FRACTION) * a.scale
     if (st.direction === 'vertical') {
       boxes.push(verticalTextBox(
@@ -220,7 +220,10 @@ export function customBoxes(
       const lines = text ? wrapText(text, maxW, size, measure, trackPx) : ['']
       const width = Math.max(...lines.map((l) => measureTracked(measure, l, size, trackPx)), 1)
       const lineHeight = Math.round(size * 1.18)
-      const box = boxOfText(id, label, a, cx, cy, Math.min(width, maxW), size, lines.length, lineHeight)
+      const box = boxOfText(
+        id, label, a, cx, cy, Math.min(width, maxW), size, lines.length, lineHeight,
+        el.rotation, { x: cx, y: cy },
+      )
       return { ...box, elementId: el.id }
     }
     const size = customElementSize(el, ctx)
@@ -240,6 +243,8 @@ export function customBoxes(
       width,
       height,
       centerY: cy,
+      rotation: el.rotation,
+      pivot: { x: cx, y: cy },
     }
   })
 }

@@ -14,6 +14,9 @@ const getFont = (): OpentypeFont => {
 }
 
 const state = makeCoverState({
+  // 出厂默认已是整块排版(flow)，本文件的基准夹具承载的是分缝文本，
+  // 因此显式声明模式，避免默认值一改就悄悄换掉被测行为
+  titleMode: 'split',
   titleLeft: '工具', titleRight: '推荐', titleFontSize: 210, subtitle: '',
   gradient: { angle: 120, stops: [{ offset: 0, color: '#f6d365' }, { offset: 100, color: '#fda085' }] },
   presetId: null, logoDataUrl: null, logoHidden: false,
@@ -286,7 +289,7 @@ describe.skipIf(!hasFont)('buildCoverSvg 自定义元素', () => {
         customElements: [{
           id: 't1', kind: 'text', content: '', text: '自定义',
           size: 48, anchor: { x: 0.2, y: 0.15, scale: 1 },
-          color: '#39c5bb', bold: true, tracking: 0,
+          color: '#39c5bb', bold: true, tracking: 0, rotation: 0,
         }],
       },
       font,
@@ -302,7 +305,7 @@ describe.skipIf(!hasFont)('buildCoverSvg 自定义元素', () => {
         customElements: [{
           id: 'i1', kind: 'image', content: 'data:image/png;base64,ZZZ', text: '',
           size: 120, anchor: { x: 0.5, y: 0.5, scale: 1 },
-          color: '#ffffff', bold: false, tracking: 0,
+          color: '#ffffff', bold: false, tracking: 0, rotation: 0,
         }],
       },
       font: null,
@@ -321,7 +324,7 @@ describe.skipIf(!hasFont)('buildCoverSvg 自定义元素', () => {
           id: 's1', kind: 'svg',
           content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 24"><rect width="48" height="24" fill="#fff"/></svg>',
           text: '', size: 240, anchor: { x: 0.5, y: 0.5, scale: 1 },
-          color: '#ffffff', bold: false, tracking: 0,
+          color: '#ffffff', bold: false, tracking: 0, rotation: 0,
         }],
       },
       font: null,
@@ -338,7 +341,7 @@ describe.skipIf(!hasFont)('buildCoverSvg 自定义元素', () => {
         customElements: [{
           id: 'i2', kind: 'image', content: 'data:image/png;base64,ZZZ', text: '',
           size: 100, anchor: { x: 0.5, y: 0.5, scale },
-          color: '#ffffff', bold: false, tracking: 0,
+          color: '#ffffff', bold: false, tracking: 0, rotation: 0,
         }],
       },
       font: null,
@@ -447,7 +450,8 @@ describe.skipIf(!hasFont)('buildCoverSvg 光影 / 噪点 / 水印', () => {
   it('字体缺失时副标题降级使用 letter-spacing 属性', () => {
     const svg = buildCoverSvg({
       state: { ...state, subtitle: '每周分享' }, font: null, defaultLogoDataUrl: '' })
-    expect(svg).toContain('letter-spacing="10.2"') // r2(34 × 0.3)
+    // 副标题默认大小 50%：字号 34、字距都随 ax.scale 减半 → r2(34 × 0.3 × 0.5)
+    expect(svg).toContain('letter-spacing="5.1"')
   })
   it('超宽水印整体水平压缩且不越出画布左缘', () => {
     const font = getFont()
@@ -484,7 +488,7 @@ describe('自定义 svg 图标的颜色解析', () => {
     color: '#39C5BB',
     bold: false,
     tracking: 0,
-    round: false,
+    rotation: 0,
   }
 
   it('把元素颜色写成 g 的 color 属性,标记里的 currentColor 才能解析出颜色', () => {

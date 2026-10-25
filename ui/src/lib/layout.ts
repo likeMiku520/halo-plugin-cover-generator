@@ -1,4 +1,6 @@
-import type { Anchor, AnchorMap, CanvasSize, CoverState, LayerKey, TitleMode } from './types'
+import type {
+  Anchor, AnchorMap, CanvasSize, CoverState, LayerKey, TextTarget, TextStyle, TextStyleMap, TitleMode,
+} from './types'
 
 /**
  * 画布基准与版式常量。
@@ -139,6 +141,57 @@ export function normalizeBackgroundScrim(value: unknown): number {
   return Math.min(CANVAS.BACKGROUND_SCRIM_MAX, Math.max(0, Math.round(value)))
 }
 
+/** 文字排版的取值域：UI 滑杆与状态校验共用，避免两处各写一份边界 */
+export const TEXT_STYLE_LIMITS = {
+  TRACKING_MIN: -0.2,
+  TRACKING_MAX: 1.5,
+  CURVE_MIN: -100,
+  CURVE_MAX: 100,
+  ROTATION_MIN: -180,
+  ROTATION_MAX: 180,
+} as const
+
+const clampTo = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
+
+/** 单个文字样式的默认值：副标题/水印沿用各自原有的字距观感，标题原本无字距 */
+function defaultTextStyle(target: TextTarget): TextStyle {
+  return {
+    tracking: target === 'subtitle' ? SUB_TRACK : target === 'watermark' ? WM_TRACK : 0,
+    curve: 0,
+    rotation: 0,
+    direction: 'horizontal',
+  }
+}
+
+export function defaultTextStyles(): TextStyleMap {
+  return {
+    title: defaultTextStyle('title'),
+    subtitle: defaultTextStyle('subtitle'),
+    watermark: defaultTextStyle('watermark'),
+  }
+}
+
+/** 旋转角收敛进 ±180：渲染层单独用它(不经过整个 TextStyle) */
+export function normalizeRotation(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
+  return Math.round(clampTo(value, TEXT_STYLE_LIMITS.ROTATION_MIN, TEXT_STYLE_LIMITS.ROTATION_MAX))
+}
+
+/** 把不可信/缺失的文字样式收敛进安全域；逐字段回落，不整块丢弃 */
+export function normalizeTextStyle(value: unknown, fallback: TextStyle): TextStyle {
+  if (typeof value !== 'object' || value === null) return { ...fallback }
+  const s = value as Record<string, unknown>
+  const num = (raw: unknown, def: number) =>
+    (typeof raw === 'number' && Number.isFinite(raw) ? raw : def)
+  const L = TEXT_STYLE_LIMITS
+  return {
+    tracking: clampTo(num(s.tracking, fallback.tracking), L.TRACKING_MIN, L.TRACKING_MAX),
+    curve: Math.round(clampTo(num(s.curve, fallback.curve), L.CURVE_MIN, L.CURVE_MAX)),
+    rotation: Math.round(clampTo(num(s.rotation, fallback.rotation), L.ROTATION_MIN, L.ROTATION_MAX)),
+    direction: s.direction === 'vertical' ? 'vertical' : 'horizontal',
+  }
+}
+
 /** 新建存档的完整默认状态 */
 export function defaultCoverState(): CoverState {
   return {
@@ -154,6 +207,7 @@ export function defaultCoverState(): CoverState {
     backgroundMode: 'gradient',
     backgroundImage: null,
     backgroundScrim: CANVAS.BACKGROUND_SCRIM,
+    textStyles: defaultTextStyles(),
     logoDataUrl: null,
     logoHidden: false,
     watermark: '',

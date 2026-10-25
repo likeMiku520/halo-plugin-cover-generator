@@ -493,4 +493,44 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
       expect(useCoverState().value.backgroundScrim).toBe(20)
     })
   })
+
+  describe('文字排版样式（旧档补齐与越界收敛）', () => {
+    it('旧档无 textStyles 时补默认：标题无字距、副标题 0.3em、水印 0.08em', () => {
+      localStorage.setItem(KEY, legacyArchive())
+      const s = useCoverState()
+      expect(s.value.textStyles.title).toEqual({
+        tracking: 0, curve: 0, rotation: 0, direction: 'horizontal',
+      })
+      expect(s.value.textStyles.subtitle.tracking).toBeCloseTo(0.3, 5)
+      expect(s.value.textStyles.watermark.tracking).toBeCloseTo(0.08, 5)
+    })
+
+    it('越界的字距/弯曲/旋转收敛进安全域，方向只认横排与竖排', () => {
+      localStorage.setItem(KEY, legacyArchive({
+        textStyles: {
+          title: { tracking: 99, curve: 400, rotation: -900, direction: 'vertical' },
+          subtitle: { tracking: -9, curve: -400, rotation: 900, direction: '斜排' },
+          watermark: {},
+        },
+      }))
+      const s = useCoverState()
+      expect(s.value.textStyles.title).toEqual({
+        tracking: 1.5, curve: 100, rotation: -180, direction: 'vertical',
+      })
+      expect(s.value.textStyles.subtitle).toEqual({
+        tracking: -0.2, curve: -100, rotation: 180, direction: 'horizontal',
+      })
+      // 空对象逐字段回落默认，而不是整块丢弃
+      expect(s.value.textStyles.watermark.tracking).toBeCloseTo(0.08, 5)
+    })
+
+    it('单个字段非法不影响同组其它字段', () => {
+      localStorage.setItem(KEY, legacyArchive({
+        textStyles: { title: { tracking: 0.5, curve: 'x', rotation: 30, direction: 'horizontal' } },
+      }))
+      expect(useCoverState().value.textStyles.title).toMatchObject({
+        tracking: 0.5, curve: 0, rotation: 30,
+      })
+    })
+  })
 })

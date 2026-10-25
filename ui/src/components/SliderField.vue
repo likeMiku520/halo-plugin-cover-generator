@@ -53,6 +53,8 @@ function onNumber(ev: Event) {
 
 <template>
   <div class="slider-field">
+    <!-- 名称必须可见:一排滑杆没有标签时无法分辨各自控制什么(实机反馈) -->
+    <span class="sf-label">{{ label }}</span>
     <input
       class="slider"
       type="range"
@@ -87,6 +89,13 @@ function onNumber(ev: Event) {
   gap: 8px;
 }
 
+.sf-label {
+  flex: 0 0 46px;
+  font-size: var(--sd-fs-xs);
+  color: var(--sd-text-2);
+  white-space: nowrap;
+}
+
 .slider {
   flex: 1;
   min-width: 0;
@@ -100,7 +109,7 @@ function onNumber(ev: Event) {
 }
 
 .num input {
-  width: 62px;
+  width: 58px;
   padding: 6px 8px;
   font-variant-numeric: tabular-nums;
   text-align: right;

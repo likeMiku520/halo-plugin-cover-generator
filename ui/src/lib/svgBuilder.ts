@@ -10,18 +10,19 @@ export interface FontLike {
   getAdvanceWidth(text: string, size: number): number
   getPath(text: string, x: number, y: number, size: number): { commands: PathCommandLike[] }
 }
-import type { Anchor, CanvasSize, CoverState, CustomElement, LayerKey } from './types'
+import type { Anchor, CanvasSize, CoverState, CustomElement, LayerKey, TextStyle, TextTarget } from './types'
 import { gradientToSvgAttrs } from './gradient'
 import { fitFontSize, type MeasureText } from './fitFontSize'
-import { pathToD } from './fontLoader'
 import { esc } from './esc'
 import {
-  CANVAS, SUB_TRACK, WM_TRACK,
-  byHeight, byWidth, customTextMaxWidth, fullMaxWidth,
-  normalizeAnchor, normalizeBackgroundScrim, scaleOf, segmentMaxWidth, watermarkMaxWidth,
+  CANVAS,
+  byHeight, byWidth, customTextMaxWidth, defaultTextStyles, fullMaxWidth,
+  normalizeAnchor, normalizeBackgroundScrim, normalizeRotation, normalizeTextStyle,
+  scaleOf, segmentMaxWidth, watermarkMaxWidth,
   type HasSize, type SizeScale,
 } from './layout'
 import { readViewBox } from './svgSanitizer'
+import { layoutRun, measureTracked, runRenderedWidth, type RunLayout } from './textLayout'
 
 /** 兼容旧引用：像素基准已迁至 lib/layout.ts，此别名保留以免下游导入路径断裂 */
 export const LAYOUT = CANVAS
@@ -29,6 +30,19 @@ export const LAYOUT = CANVAS
 const r2 = (n: number) => Math.round(n * 100) / 100
 
 type AnchorAlign = 'start' | 'middle' | 'end'
+
+/** 取某类内置文字的用户排版样式；旧档缺字段时状态层已补齐，这里只做兜底 */
+function textStyleOf(state: CoverState, key: TextTarget): TextStyle {
+  return normalizeTextStyle(state.textStyles?.[key], defaultTextStyles()[key])
+}
+
+/** 绕锚点旋转；角度为 0 时原样返回，不给产物加一层无意义的 <g> */
+function rotateAbout(inner: string, deg: number, cx: number, cy: number): string {
+  if (!inner) return ''
+  const d = normalizeRotation(deg)
+  if (d === 0) return inner
+  return `<g transform="rotate(${r2(d)} ${r2(cx)} ${r2(cy)})">${inner}</g>`
+}
 
 /** 各元素的横向锚定方式：Logo 居中、标题居中（分缝时锚点即中缝）、水印右对齐 */
 const ALIGN: Record<'logo' | 'title' | 'subtitle' | 'watermark', AnchorAlign> = {
@@ -199,44 +213,8 @@ function logoSizeOf(a: Anchor, ctx: Ctx): number {
   return byWidth(CANVAS.LOGO_SIZE, ctx.s) * a.scale
 }
 
-/** 路径版带字距文字：逐字生成 + 光标推进；超宽时整体水平压缩 */
-function pathTextTracked(
-  font: FontLike, s: string, x: number, y: number,
-  fontSize: number, trackPx: number, fits: boolean, maxW: number, anchor: AnchorAlign = 'middle',
-): string {
-  const chars = [...s]
-  const widths = chars.map(c => font.getAdvanceWidth(c, fontSize))
-  const w = widths.reduce((a, b) => a + b, 0) + trackPx * Math.max(0, chars.length - 1)
-  const effW = fits ? w : maxW
-  const tx = anchor === 'end' ? x - effW : anchor === 'middle' ? x - effW / 2 : x
-  const sx = fits ? 1 : maxW / w
-  let cursor = 0
-  let d = ''
-  chars.forEach((c, i) => {
-    d += pathToD(font.getPath(c, cursor, y, fontSize))
-    cursor += widths[i] + trackPx
-  })
-  const sxRounded = Math.round(sx * 10000) / 10000
-  const tf = `translate(${r2(tx)} 0)${sxRounded !== 1 ? ` scale(${sxRounded} 1)` : ''}`
-  return `<path transform="${tf}" d="${d}" fill="#fff"/>`
-}
-
-/** 降级版带字距文字：SVG 原生 letter-spacing */
-function fallbackTextTracked(s: string, x: number, y: number, fontSize: number,
-  trackPx: number, fits: boolean, maxW: number, anchor: AnchorAlign = 'middle'): string {
-  const tl = fits ? '' : ` textLength="${maxW}" lengthAdjust="spacingAndGlyphs"`
-  return `<text x="${r2(x)}" y="${r2(y)}" font-family="sans-serif" font-weight="bold" ` +
-    `font-size="${fontSize}" letter-spacing="${r2(trackPx)}" fill="#fff" ` +
-    `text-anchor="${anchor}"${tl}>${esc(s)}</text>`
-}
-
-/** 含字距的宽度度量：∑字宽 + 字距×(字数−1) */
-export function measureTracked(
-  measure: MeasureText, s: string, fontSize: number, trackPx: number,
-): number {
-  const n = [...s].length
-  return measure(s, fontSize) + trackPx * Math.max(0, n - 1)
-}
+// 文字排布与含字距度量已收敛到 lib/textLayout;此处转出以保持下游导入路径稳定
+export { measureTracked }
 
 /** 文本行几何：命中框与渲染共用同一份度量，保证选中框贴合图元 */
 export interface LineMetrics {
@@ -248,43 +226,7 @@ export interface LineMetrics {
 export function lineWidth(
   measure: MeasureText, s: string, fontSize: number, trackPx: number, maxW: number,
 ): number {
-  const w = measureTracked(measure, s, fontSize, trackPx)
-  return maxW > 0 && w > maxW ? maxW : w
-}
-
-/**
- * 排版一行文本：路径版支持任意颜色与字距，无字体时降级为 <text>。
- * maxW 为可用宽度，超出时水平压缩到该宽度；extraScale 用于分缝模式让两段
- * 共用一个已算好的压缩系数（字号已按该系数缩放，此处只补压缩余量）。
- */
-function layoutLine(
-  font: FontLike | null, s: string, x: number, y: number,
-  fontSize: number, trackPx: number, color: string,
-  anchor: AnchorAlign, bold: boolean, maxW: number, extraScale = 1,
-): string {
-  if (font) {
-    const chars = [...s]
-    const widths = chars.map((c) => font.getAdvanceWidth(c, fontSize))
-    const w = widths.reduce((a, b) => a + b, 0) + trackPx * Math.max(0, chars.length - 1)
-    const fit = maxW > 0 && w > maxW ? maxW / w : 1
-    const sx = fit * extraScale
-    const effW = w * sx
-    const tx = anchor === 'end' ? x - effW : anchor === 'middle' ? x - effW / 2 : x
-    let cursor = 0
-    let d = ''
-    chars.forEach((c, i) => {
-      d += pathToD(font.getPath(c, cursor, y, fontSize))
-      cursor += widths[i] + trackPx
-    })
-    const sxRounded = Math.round(sx * 10000) / 10000
-    const tf = `translate(${r2(tx)} 0)${sxRounded !== 1 ? ` scale(${sxRounded} 1)` : ''}`
-    return `<path transform="${tf}" d="${d}" fill="${esc(color)}"/>`
-  }
-  const weight = bold ? 'bold' : 'normal'
-  const tl = maxW > 0 ? ` textLength="${r2(maxW)}" lengthAdjust="spacingAndGlyphs"` : ''
-  return `<text x="${r2(x)}" y="${r2(y)}" font-family="sans-serif" font-weight="${weight}" ` +
-    `font-size="${fontSize}" letter-spacing="${r2(trackPx)}" fill="${esc(color)}" ` +
-    `text-anchor="${anchor}"${tl}>${esc(s)}</text>`
+  return runRenderedWidth(measure, s, fontSize, trackPx, maxW)
 }
 
 /**
@@ -354,38 +296,52 @@ function titleLayer(
   const minSize = CANVAS.TITLE_MIN * ctx.s.h
   const wrap = (inner: string) => (inner ? `<g filter="url(#shadow)">${inner}</g>` : '')
   const maxW = fullMaxWidth(ctx) * ax.scale
+  const ts = textStyleOf(state, 'title')
+  const layout: RunLayout = { curve: ts.curve, direction: ts.direction }
+  const vertical = ts.direction === 'vertical'
+  // 竖排沿纵向堆叠,横向宽度预算不再适用:置 0 表示不压缩,列高由字号决定
+  const budget = vertical ? 0 : maxW
+  const trackOf = (fs: number) => fs * ts.tracking
+  /** 收尾:先加投影,再绕锚点整体旋转 */
+  const finish = (inner: string) => rotateAbout(wrap(inner), ts.rotation, cx, baseline)
   // 两种排版各有独立文本：整块模式只看 titleFlow，分缝模式只看左右两段
   const hasText = state.titleMode === 'flow' ? !!flow : !!(left || right)
 
   if (!hasText) {
     // 占位(仅预览态可见;导出按钮在 UI 层因空标题禁用)。降透明度以免
     // 与真实封面混淆——首跑用户此前看到的是一张"已完成"的封面(A5)
-    const ph = layoutLine(
-      font, '标题标题', cx, baseline, byHeight(160, ctx.s), 0, '#ffffff', 'middle', true, maxW,
+    const phSize = byHeight(160, ctx.s)
+    const ph = layoutRun(
+      font, '标题标题', cx, baseline, phSize, trackOf(phSize),
+      '#ffffff', 'middle', true, budget, layout,
     )
-    return wrap(`<g opacity="0.4">${ph}</g>`)
+    return finish(`<g opacity="0.4">${ph}</g>`)
   }
 
   if (state.titleMode === 'flow') {
-    const lines = wrapText(flow, maxW, base, measure)
+    // 竖排不做横向断行:每行都会变成一列,断行只会得到一排并列的短列
+    const lines = vertical ? flow.split('\n') : wrapText(flow, maxW, base, measure)
     const lineHeight = Math.round(base * 1.18)
     // 整块以锚点为竖直中心：行数增加时向上向下对称展开
     const firstBaseline = baseline - ((lines.length - 1) * lineHeight) / 2
     const rendered = lines
-      .map((line, i) => layoutLine(
-        font, line, cx, firstBaseline + i * lineHeight, base, 0, '#ffffff', 'middle', true, maxW,
+      .map((line, i) => layoutRun(
+        font, line, cx, firstBaseline + i * lineHeight, base, trackOf(base),
+        '#ffffff', 'middle', true, budget, layout,
       ))
       .join('')
-    return wrap(rendered)
+    return finish(rendered)
   }
 
   if (!hasLogo) {
-    // 无 Logo：两段拼接为一行整体居中；放不下时由 layoutLine 压缩到可用宽度
-    const { fontSize } = fitFontSize(
-      `${left}${right}`, maxW, { base, min: minSize }, measure,
-    )
-    return wrap(layoutLine(
-      font, `${left}${right}`, cx, baseline, fontSize, 0, '#ffffff', 'middle', true, maxW,
+    // 无 Logo：两段拼接为一行整体居中；放不下时压缩到可用宽度
+    const joined = `${left}${right}`
+    const { fontSize } = vertical
+      ? { fontSize: base }
+      : fitFontSize(joined, maxW, { base, min: minSize }, measure)
+    return finish(layoutRun(
+      font, joined, cx, baseline, fontSize, trackOf(fontSize),
+      '#ffffff', 'middle', true, budget, layout,
     ))
   }
 
@@ -407,17 +363,21 @@ function titleLayer(
     ? (factors[0] ?? 1)
     : Math.sqrt(factors.reduce((a, b) => a * b, 1))
   const clamped = Math.min(1, Math.max(minSizeScale, shared))
-  const size = Math.max(minSize, Math.round(base * clamped))
+  // 竖排两段各成一列,列宽与段宽无关:不参与那套横向缩放
+  const size = vertical ? base : Math.max(minSize, Math.round(base * clamped))
   // 字号被下限截住后，剩余比例转为水平压缩，两段因此仍严格不超单侧可用宽度
-  const compress = clamped > 0 ? clamped / (size / base) : 1
+  const compress = vertical ? 1 : (clamped > 0 ? clamped / (size / base) : 1)
+  const segBudget = vertical ? 0 : segMax
   const half = byWidth(state.seamGap, ctx.s) / 2
   const leftText = left
-    ? layoutLine(font, left, cx - half, baseline, size, 0, '#ffffff', 'end', true, segMax, compress)
+    ? layoutRun(font, left, cx - half, baseline, size, trackOf(size),
+        '#ffffff', 'end', true, segBudget, layout, compress)
     : ''
   const rightText = right
-    ? layoutLine(font, right, cx + half, baseline, size, 0, '#ffffff', 'start', true, segMax, compress)
+    ? layoutRun(font, right, cx + half, baseline, size, trackOf(size),
+        '#ffffff', 'start', true, segBudget, layout, compress)
     : ''
-  return wrap(leftText + rightText)
+  return finish(leftText + rightText)
 }
 
 /**
@@ -512,31 +472,40 @@ function subTitleLayer(
   if (!sub) return ''
   const ax = normalizeAnchor(state.layout.subtitle)
   const { x: cx, y: baseline } = px(ax, ctx)
+  const ts = textStyleOf(state, 'subtitle')
+  const layout: RunLayout = { curve: ts.curve, direction: ts.direction }
+  const vertical = ts.direction === 'vertical'
   const lineW = byWidth(CANVAS.SUB_LINE_W, ctx.s)
   const lineGap = byWidth(CANVAS.SUB_LINE_GAP, ctx.s)
-  // 两侧装饰线占位后，文字实际可用宽度收窄
-  const textMax = (fullMaxWidth(ctx) - 2 * (lineW + lineGap)) * ax.scale
-  const mTracked = (t: string, sz: number) => measureTracked(measure, t, sz, sz * SUB_TRACK)
-  const { fontSize, fits } = fitFontSize(sub, textMax,
-    { base: byHeight(CANVAS.SUB_BASE, ctx.s), min: byHeight(CANVAS.SUB_MIN, ctx.s) }, mTracked)
-  const text = font
-    ? pathTextTracked(font, sub, cx, baseline,
-        fontSize, fontSize * SUB_TRACK, fits, textMax)
-    : fallbackTextTracked(sub, cx, baseline,
-        fontSize, fontSize * SUB_TRACK, fits, textMax)
-  const w = mTracked(sub, fontSize)
-  // fits=false 时文字被压缩到 textMax，装饰线必须贴压缩后的实际宽，否则跑出画布
-  const renderedW = fits ? w : textMax
-  const lineY = baseline - Math.round(fontSize * 0.32)
-  const line = (lx: number) =>
-    `<rect x="${r2(lx)}" y="${r2(lineY)}" width="${r2(lineW)}" height="2" ` +
-    `rx="1" fill="#fff"/>`
+  // 两侧装饰线占位后，文字实际可用宽度收窄；竖排是单列，不需要为侧线让位
+  const textMax = vertical ? 0 : (fullMaxWidth(ctx) - 2 * (lineW + lineGap)) * ax.scale
+  const trackPxOf = (sz: number) => sz * ts.tracking
+  const mTracked = (t: string, sz: number) => measureTracked(measure, t, sz, trackPxOf(sz))
+  // 竖排没有横向预算可言，字号直接取基准（大小仍由元素面板掌握）
+  const { fontSize } = vertical
+    ? { fontSize: byHeight(CANVAS.SUB_BASE, ctx.s) }
+    : fitFontSize(sub, textMax,
+        { base: byHeight(CANVAS.SUB_BASE, ctx.s), min: byHeight(CANVAS.SUB_MIN, ctx.s) }, mTracked)
+  const text = layoutRun(font, sub, cx, baseline, fontSize, trackPxOf(fontSize),
+    '#ffffff', 'middle', true, textMax, layout)
+  // 装饰线只在横排出现：竖排是一列字，两侧横线会横穿列身
+  const sideLines = vertical ? '' : (() => {
+    // 被压缩时装饰线必须贴压缩后的实际宽，否则跑出画布
+    const renderedW = runRenderedWidth(measure, sub, fontSize, trackPxOf(fontSize), textMax)
+    const lineY = baseline - Math.round(fontSize * 0.32)
+    const line = (lx: number) =>
+      `<rect x="${r2(lx)}" y="${r2(lineY)}" width="${r2(lineW)}" height="2" ` +
+      `rx="1" fill="#fff"/>`
+    return `<g opacity="0.55">` +
+      line(cx - renderedW / 2 - lineGap - lineW) +
+      line(cx + renderedW / 2 + lineGap) +
+      `</g>`
+  })()
   // 文字带轻投影；装饰线不进投影组（2px 细线会被投影糊出明显边缘）
-  return `<g filter="url(#sub-shadow)" opacity="0.9">${text}</g>` +
-    `<g opacity="0.55">` +
-    line(cx - renderedW / 2 - lineGap - lineW) +
-    line(cx + renderedW / 2 + lineGap) +
-    `</g>`
+  return rotateAbout(
+    `<g filter="url(#sub-shadow)" opacity="0.9">${text}</g>${sideLines}`,
+    ts.rotation, cx, baseline,
+  )
 }
 
 /** Logo 层：按锚点定位与缩放，圆形裁剪 + 双层柔影 */
@@ -558,14 +527,15 @@ function watermarkLayer(
   if (!wm) return ''
   const ax = normalizeAnchor(state.layout.watermark)
   const { x, y } = px(ax, ctx)
+  const ts = textStyleOf(state, 'watermark')
+  const layout: RunLayout = { curve: ts.curve, direction: ts.direction }
   const size = Math.max(12, Math.round(byHeight(CANVAS.WM_SIZE, ctx.s) * ax.scale))
-  const trackPx = size * WM_TRACK
-  const maxW = watermarkMaxWidth(ctx) * ax.scale
-  const fits = measureTracked(measure, wm, size, trackPx) <= maxW
-  const text = font
-    ? pathTextTracked(font, wm, x, y, size, trackPx, fits, maxW, ALIGN.watermark)
-    : fallbackTextTracked(wm, x, y, size, trackPx, fits, maxW, ALIGN.watermark)
-  return `<g opacity="0.65">${text}</g>`
+  const trackPx = size * ts.tracking
+  // 竖排按纵向堆叠，横向宽度预算不适用
+  const maxW = ts.direction === 'vertical' ? 0 : watermarkMaxWidth(ctx) * ax.scale
+  const text = layoutRun(font, wm, x, y, size, trackPx,
+    '#ffffff', ALIGN.watermark, true, maxW, layout)
+  return rotateAbout(`<g opacity="0.65">${text}</g>`, ts.rotation, x, y)
 }
 
 /** 元素实际尺寸：文字按字号、图形按边长，命中框与渲染共用此换算 */
@@ -590,7 +560,7 @@ function customElementLayer(
     const lineHeight = Math.round(size * 1.18)
     const firstBaseline = y - ((lines.length - 1) * lineHeight) / 2
     const body = lines
-      .map((line, i) => layoutLine(
+      .map((line, i) => layoutRun(
         font, line, x, firstBaseline + i * lineHeight, size, trackPx, el.color, 'middle', el.bold, maxW,
       ))
       .join('')

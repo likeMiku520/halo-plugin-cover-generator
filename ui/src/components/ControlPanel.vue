@@ -511,7 +511,7 @@ const mediaSub = computed(() => {
   border-radius: 50%;
   background: var(--sd-accent-dot);
   align-self: center;
-  box-shadow: 0 0 10px rgb(253 160 133 / 55%);
+  box-shadow: 0 0 10px rgb(57 197 187 / 55%);
 }
 
 /* ---- 标签行 ---- */

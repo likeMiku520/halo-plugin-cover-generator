@@ -1,11 +1,12 @@
 import { ref, watch, onScopeDispose } from 'vue'
 import type { Ref } from 'vue'
-import type { Anchor, AnchorMap, CoverState, CustomElement, CustomKind, LayerKey, TitleMode } from '../lib/types'
+import type { Anchor, AnchorMap, CoverState, CustomElement, CustomKind, LayerKey, TextStyleMap, TextTarget, TitleMode } from '../lib/types'
 import { PRESETS } from '../lib/presets'
 import { splitTitle } from '../lib/splitTitle'
 import {
-  CANVAS, REF_H, REF_W, defaultAnchors, defaultCoverState, defaultLayers,
-  isValidCanvasSize, normalizeAnchor, normalizeBackgroundScrim, normalizeCanvasSize, normalizeSeamGap,
+  CANVAS, REF_H, REF_W, defaultAnchors, defaultCoverState, defaultLayers, defaultTextStyles,
+  isValidCanvasSize, normalizeAnchor, normalizeBackgroundScrim, normalizeCanvasSize,
+  normalizeSeamGap, normalizeTextStyle,
 } from '../lib/layout'
 
 /** 工作台状态存档键;CoverWorkbench 需同名键判断「是否存在存档」(archive-wins 播种门槛) */
@@ -54,6 +55,9 @@ function isValidAnchor(v: unknown): v is Anchor {
 }
 
 const CUSTOM_KINDS: CustomKind[] = ['image', 'text', 'svg']
+
+/** 三个可单独调排版的内置文字元素:校验与 UI 共用同一份清单 */
+export const TEXT_TARGETS: TextTarget[] = ['title', 'subtitle', 'watermark']
 
 function isValidCustomElement(v: unknown): v is CustomElement {
   if (typeof v !== 'object' || v === null) return false
@@ -191,6 +195,22 @@ function repairNewFields(
   if (merged.backgroundMode === 'image' && !merged.backgroundImage) {
     merged.backgroundMode = 'gradient'
     repaired = true
+  }
+  // 文字排版样式旧档必然缺失;逐字段收敛而不是整块丢弃,已调好的字距/角度不因
+  // 某一个字段非法而全部复原
+  const rawStyles = raw.textStyles
+  const styleDefaults = defaultTextStyles()
+  if (typeof rawStyles !== 'object' || rawStyles === null) {
+    merged.textStyles = styleDefaults
+    repaired = true
+  } else {
+    const src = rawStyles as Record<string, unknown>
+    const next = {} as TextStyleMap
+    for (const key of TEXT_TARGETS) {
+      if (src[key] === undefined) repaired = true
+      next[key] = normalizeTextStyle(src[key], styleDefaults[key])
+    }
+    merged.textStyles = next
   }
   // 图层顺序先收敛为已知键并去重，再补上缺失项（新增元素、旧档无该字段）。
 // 不去重会让同一元素被绘制两次（存档可被手工编辑，属于不可信输入）

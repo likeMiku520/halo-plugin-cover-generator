@@ -30,6 +30,24 @@ const boxes = computed<ElementBox[]>(() => [
 
 const pct = (n: number, total: number) => `${(n / total) * 100}%`
 
+/** 选中框样式：旋转的文字要让框绕同一个锚点转，否则框与字会错开 */
+function ringStyle(box: ElementBox): Record<string, string> {
+  const w = box.width + PAD * 2
+  const h = box.height + PAD * 2
+  const style: Record<string, string> = {
+    left: pct(box.x - PAD, ctx.value.W),
+    top: pct(box.y - PAD, ctx.value.H),
+    width: pct(w, ctx.value.W),
+    height: pct(h, ctx.value.H),
+  }
+  if (box.rotation && box.pivot) {
+    style.transform = `rotate(${box.rotation}deg)`
+    style.transformOrigin =
+      `${pct(box.pivot.x - (box.x - PAD), w)} ${pct(box.pivot.y - (box.y - PAD), h)}`
+  }
+  return style
+}
+
 /** 选中框略微外扩，避免与文字笔画完全重合而看不清边界 */
 const PAD = 6
 </script>
@@ -40,12 +58,7 @@ const PAD = 6
       <div
         v-if="selected === box.id"
         class="ring"
-        :style="{
-          left: pct(box.x - PAD, ctx.W),
-          top: pct(box.y - PAD, ctx.H),
-          width: pct(box.width + PAD * 2, ctx.W),
-          height: pct(box.height + PAD * 2, ctx.H),
-        }"
+        :style="ringStyle(box)"
       >
         <span class="tag">{{ box.label }}</span>
       </div>

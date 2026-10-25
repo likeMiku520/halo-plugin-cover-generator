@@ -1,3 +1,5 @@
+import type { TextDirection } from './textLayout'
+
 /** 渐变色标：offset 为 0–100 的百分比 */
 export interface GradientStop {
   offset: number
@@ -41,6 +43,26 @@ export type TitleMode = 'split' | 'flow'
 
 /** 背景模式：gradient 用渐变，image 用自定义背景图 */
 export type BackgroundMode = 'gradient' | 'image'
+
+/** 可单独调排版的三个内置文字元素 */
+export type TextTarget = 'title' | 'subtitle' | 'watermark'
+
+/**
+ * 文字排版样式。三个文字元素各存一份：
+ * 字号/位置/大小是「这块放在哪」，本结构是「这行字怎么排」。
+ */
+export interface TextStyle {
+  /** 字距（em）：正数更疏，负数更紧 */
+  tracking: number
+  /** 弯曲度（-100–100）：0 为直线，正负决定弧向；仅横排生效 */
+  curve: number
+  /** 旋转角度（-180–180，顺时针为正） */
+  rotation: number
+  /** 排列方向：横排或竖排 */
+  direction: TextDirection
+}
+
+export type TextStyleMap = Record<TextTarget, TextStyle>
 
 /** 自定义元素类型：image 位图、text 矢量文字、svg 图标 */
 export type CustomKind = 'image' | 'text' | 'svg'
@@ -92,6 +114,8 @@ export interface CoverState {
   backgroundImage: string | null
   /** 背景图之上的压暗遮罩强度（0–60 %）：照片明暗不可控，不压暗时白字常读不出来 */
   backgroundScrim: number
+  /** 标题 / 副标题 / 水印各自的排版样式（字距、弯曲、旋转、方向） */
+  textStyles: TextStyleMap
   /** 用户上传的 Logo dataURL；null 表示用内置默认 */
   logoDataUrl: string | null
   logoHidden: boolean

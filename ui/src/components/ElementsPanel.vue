@@ -8,7 +8,9 @@ import { fetchLogoAsDataUrl, validateLogoUrl } from '../lib/logoFetcher'
 import { sanitizeSvgMarkup } from '../lib/svgSanitizer'
 import { HEX6, firstMarkupColor, recolorSvgMarkup } from '../lib/svgColor'
 import { fetchIconSvg } from '../lib/iconFetch'
+import { TEXT_STYLE_LIMITS } from '../lib/layout'
 import { MAX_CUSTOM_ELEMENTS } from '../composables/useCoverState'
+import type { TextStyle, TextTarget } from '../lib/types'
 import SliderField from './SliderField.vue'
 
 /**
@@ -100,6 +102,29 @@ function onTitleSizePercent(percent: number) {
   set({
     titleFontSize: size,
     layout: { ...props.modelValue.layout, title: { ...props.modelValue.layout.title, scale: 1 } },
+  })
+}
+
+/**
+ * 选中的是不是可单独调排版的内置文字元素(标题 / 副标题 / 水印)。
+ * 自定义文字元素不参与:它们的排版由自身字段掌握,不共用这套样式。
+ */
+const activeTextTarget = computed<TextTarget | null>(() => {
+  const id = props.selected
+  return id === 'title' || id === 'subtitle' || id === 'watermark' ? id : null
+})
+const activeTextStyle = computed(() =>
+  activeTextTarget.value ? props.modelValue.textStyles[activeTextTarget.value] : null)
+
+/** 文字排版是「这一行字怎么排」,与位置/大小分开存放 */
+function updateTextStyle(patch: Partial<TextStyle>) {
+  const key = activeTextTarget.value
+  if (!key) return
+  set({
+    textStyles: {
+      ...props.modelValue.textStyles,
+      [key]: { ...props.modelValue.textStyles[key], ...patch },
+    },
   })
 }
 
@@ -478,6 +503,60 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
           />
         </div>
 
+        <template v-if="activeTextStyle">
+          <div class="sub-head">文字排版</div>
+          <SliderField
+            :model-value="activeTextStyle.tracking"
+            :min="TEXT_STYLE_LIMITS.TRACKING_MIN"
+            :max="TEXT_STYLE_LIMITS.TRACKING_MAX"
+            :step="0.01"
+            label="字间距"
+            suffix="em"
+            @update:model-value="updateTextStyle({ tracking: $event })"
+          />
+          <SliderField
+            :model-value="activeTextStyle.curve"
+            :min="TEXT_STYLE_LIMITS.CURVE_MIN"
+            :max="TEXT_STYLE_LIMITS.CURVE_MAX"
+            :step="5"
+            label="弯曲度"
+            @update:model-value="updateTextStyle({ curve: $event })"
+          />
+          <SliderField
+            :model-value="activeTextStyle.rotation"
+            :min="TEXT_STYLE_LIMITS.ROTATION_MIN"
+            :max="TEXT_STYLE_LIMITS.ROTATION_MAX"
+            :step="5"
+            label="旋转"
+            suffix="°"
+            @update:model-value="updateTextStyle({ rotation: $event })"
+          />
+          <div class="dir-row">
+            <span class="sf-label">方向</span>
+            <div class="seg" role="group" aria-label="文字排列方向">
+              <button
+                type="button"
+                class="seg-btn"
+                :class="{ 'is-on': activeTextStyle.direction === 'horizontal' }"
+                :aria-pressed="activeTextStyle.direction === 'horizontal'"
+                @click="updateTextStyle({ direction: 'horizontal' })"
+              >
+                横排
+              </button>
+              <button
+                type="button"
+                class="seg-btn"
+                :class="{ 'is-on': activeTextStyle.direction === 'vertical' }"
+                :aria-pressed="activeTextStyle.direction === 'vertical'"
+                @click="updateTextStyle({ direction: 'vertical' })"
+              >
+                竖排
+              </button>
+            </div>
+          </div>
+          <p class="hint">弯曲度仅横排生效；竖排按字号逐字堆叠</p>
+        </template>
+
         <template v-if="activeElement">
           <label v-if="activeElement.kind === 'text'" class="field">
             <span class="lb">文字内容</span>
@@ -634,6 +713,33 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
 /* 附件库入口:与上方的直链导入行留出间距 */
 .picker-slot {
   margin-top: 8px;
+}
+
+/* ---- 文字排版分组:与位置/大小区分开,并给方向切换同类标签 ---- */
+.sub-head {
+  margin: 10px 0 6px;
+  font-size: var(--sd-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--sd-text-2);
+}
+
+.dir-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.dir-row .sf-label {
+  flex: 0 0 46px;
+  font-size: var(--sd-fs-xs);
+  color: var(--sd-text-2);
+  white-space: nowrap;
+}
+
+.dir-row .seg {
+  flex: 1;
 }
 
 /* ---- 元素列表:内置与自定义同构,行高一致 ---- */

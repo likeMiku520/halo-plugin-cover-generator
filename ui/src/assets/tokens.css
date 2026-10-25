@@ -128,7 +128,7 @@
   --sd-edge-bright-strong: var(--pit-white-90);
   --sd-edge-hairline: var(--pit-white-80); /* 卡内芯发丝线 */
   --sd-edge-inset-light: var(--pit-white-35); /* CTA 上缘内受光 */
-  --sd-accent-dot: linear-gradient(120deg, #f6d365, #fda085); /* 面板头暖色圆点(日落橙同源) */
+  --sd-accent-dot: linear-gradient(120deg, var(--pit-teal-300), var(--sd-accent)); /* 面板头圆点:与主题青同源 */
 
   /* 阴影(环境光自上而下,方向一致) */
   --sd-shadow-panel: 0 24px 70px var(--pit-shadow-14);
@@ -199,7 +199,9 @@
  * 仅键盘聚焦命中,鼠标点击不出环。 */
 .cover-workbench .sd-field {
   background: var(--sd-surface-control);
-  border: 1px solid transparent;
+  /* 静默态就给出可见描边:此前 transparent + 内圈发丝线在小面板里几乎看不出
+   * 哪里能输入(实机反馈),改为常驻细线,聚焦仍是青环 */
+  border: 1px solid var(--sd-line);
   border-radius: var(--sd-r-control);
   color: var(--sd-text);
   font-size: var(--sd-fs-base);
@@ -211,7 +213,7 @@
     box-shadow var(--sd-dur-hover) var(--sd-ease);
 }
 .cover-workbench .sd-field:hover {
-  border-color: var(--sd-line);
+  border-color: var(--sd-line-strong);
 }
 .cover-workbench .sd-field:focus-visible {
   outline: none;

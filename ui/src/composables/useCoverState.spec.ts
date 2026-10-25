@@ -370,11 +370,12 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
       ],
     }))
     const s = useCoverState()
-    expect(s.value.customElements.map((e) => [e.id, e.rotation]))
+    expect(s.value.customElements.map((e) => [e.id, e.anchor.rotation]))
       .toEqual([['legacy', 0], ['wild', 180]])
     // 补齐与收敛都要立即回写：下次读取时存档里已是合法角度
     const saved = JSON.parse(localStorage.getItem(KEY)!)
-    expect(saved.customElements.map((e: { rotation: number }) => e.rotation)).toEqual([0, 180])
+    expect(saved.customElements.map((e: { anchor: { rotation: number } }) => e.anchor.rotation))
+      .toEqual([0, 180])
   })
 
   it('SVG 元素必须含 <svg> 标记，text 元素无此要求', () => {
@@ -524,7 +525,7 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
       localStorage.setItem(KEY, legacyArchive())
       const s = useCoverState()
       expect(s.value.textStyles.title).toEqual({
-        tracking: 0, curve: 0, rotation: 0, direction: 'horizontal',
+        tracking: 0, curve: 0, direction: 'horizontal', color: '#ffffff', bold: false,
       })
       expect(s.value.textStyles.subtitle.tracking).toBeCloseTo(0.3, 5)
       expect(s.value.textStyles.watermark.tracking).toBeCloseTo(0.08, 5)
@@ -540,11 +541,14 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
       }))
       const s = useCoverState()
       expect(s.value.textStyles.title).toEqual({
-        tracking: 1.5, curve: 100, rotation: -180, direction: 'vertical',
+        tracking: 1.5, curve: 100, direction: 'vertical', color: '#ffffff', bold: false,
       })
       expect(s.value.textStyles.subtitle).toEqual({
-        tracking: -0.2, curve: -100, rotation: 180, direction: 'horizontal',
+        tracking: -0.2, curve: -100, direction: 'horizontal', color: '#ffffff', bold: false,
       })
+      // 旧档的 rotation 在 textStyles 里，2.0 起归 anchor 所有并按 ±180 收敛
+      expect(s.value.layout.title.rotation).toBe(-180)
+      expect(s.value.layout.subtitle.rotation).toBe(180)
       // 空对象逐字段回落默认，而不是整块丢弃
       expect(s.value.textStyles.watermark.tracking).toBeCloseTo(0.08, 5)
     })
@@ -554,7 +558,7 @@ describe('useCoverState 新增字段(布局与自定义元素)的迁移与信任
         textStyles: { title: { tracking: 0.5, curve: 'x', rotation: 30, direction: 'horizontal' } },
       }))
       expect(useCoverState().value.textStyles.title).toMatchObject({
-        tracking: 0.5, curve: 0, rotation: 30,
+        tracking: 0.5, curve: 0, color: '#ffffff', bold: false,
       })
     })
   })

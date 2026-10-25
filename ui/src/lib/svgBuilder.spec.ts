@@ -17,6 +17,9 @@ const state = makeCoverState({
   // 出厂默认已是整块排版(flow)，本文件的基准夹具承载的是分缝文本，
   // 因此显式声明模式，避免默认值一改就悄悄换掉被测行为
   titleMode: 'split',
+  // 分辨率同样钉在参考画布上：本文件的数值断言都是在参考比例下校准的，
+  // 画布尺寸本身另有测试覆盖，不该让「换默认分辨率」把所有数字断言冲掉
+  canvas: { width: 1200, height: 630 },
   titleLeft: '工具', titleRight: '推荐', titleFontSize: 210, subtitle: '',
   gradient: { angle: 120, stops: [{ offset: 0, color: '#f6d365' }, { offset: 100, color: '#fda085' }] },
   presetId: null, logoDataUrl: null, logoHidden: false,
@@ -288,8 +291,8 @@ describe.skipIf(!hasFont)('buildCoverSvg 自定义元素', () => {
         ...state,
         customElements: [{
           id: 't1', kind: 'text', content: '', text: '自定义',
-          size: 48, anchor: { x: 0.2, y: 0.15, scale: 1 },
-          color: '#39c5bb', bold: true, tracking: 0, rotation: 0,
+          size: 48, anchor: { x: 0.2, y: 0.15, scale: 1, opacity: 1, rotation: 0 },
+          color: '#39c5bb', bold: true, tracking: 0, curve: 0, direction: 'horizontal' as const, aspect: 1,
         }],
       },
       font,
@@ -304,8 +307,8 @@ describe.skipIf(!hasFont)('buildCoverSvg 自定义元素', () => {
         ...state,
         customElements: [{
           id: 'i1', kind: 'image', content: 'data:image/png;base64,ZZZ', text: '',
-          size: 120, anchor: { x: 0.5, y: 0.5, scale: 1 },
-          color: '#ffffff', bold: false, tracking: 0, rotation: 0,
+          size: 120, anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 },
+          color: '#ffffff', bold: false, tracking: 0, curve: 0, direction: 'horizontal' as const, aspect: 1,
         }],
       },
       font: null,
@@ -323,8 +326,8 @@ describe.skipIf(!hasFont)('buildCoverSvg 自定义元素', () => {
         customElements: [{
           id: 's1', kind: 'svg',
           content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 24"><rect width="48" height="24" fill="#fff"/></svg>',
-          text: '', size: 240, anchor: { x: 0.5, y: 0.5, scale: 1 },
-          color: '#ffffff', bold: false, tracking: 0, rotation: 0,
+          text: '', size: 240, anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 },
+          color: '#ffffff', bold: false, tracking: 0, curve: 0, direction: 'horizontal' as const, aspect: 1,
         }],
       },
       font: null,
@@ -340,8 +343,8 @@ describe.skipIf(!hasFont)('buildCoverSvg 自定义元素', () => {
         ...state,
         customElements: [{
           id: 'i2', kind: 'image', content: 'data:image/png;base64,ZZZ', text: '',
-          size: 100, anchor: { x: 0.5, y: 0.5, scale },
-          color: '#ffffff', bold: false, tracking: 0, rotation: 0,
+          size: 100, anchor: { x: 0.5, y: 0.5, scale, opacity: 1, rotation: 0 },
+          color: '#ffffff', bold: false, tracking: 0, curve: 0, direction: 'horizontal' as const, aspect: 1,
         }],
       },
       font: null,
@@ -484,11 +487,13 @@ describe('自定义 svg 图标的颜色解析', () => {
     content: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M0 0h24v24H0z"/></svg>',
     text: '',
     size: 120,
-    anchor: { x: 0.5, y: 0.5, scale: 1 },
+    anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 },
     color: '#39C5BB',
     bold: false,
     tracking: 0,
-    rotation: 0,
+    curve: 0,
+    direction: 'horizontal' as const,
+    aspect: 1,
   }
 
   it('把元素颜色写成 g 的 color 属性,标记里的 currentColor 才能解析出颜色', () => {

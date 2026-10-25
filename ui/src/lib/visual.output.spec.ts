@@ -44,10 +44,10 @@ describe.skipIf(!existsSync(FONT_PATH))('视觉快照产物', () => {
         titleLeft: '移动', titleRight: '元素',
         subtitle: '副标题', watermark: 'example.com',
         layout: {
-          logo: { x: 0.16, y: 0.24, scale: 0.6 },
-          title: { x: 0.55, y: 0.72, scale: 0.8 },
-          subtitle: { x: 0.5, y: 0.9, scale: 0.9 },
-          watermark: { x: 0.5, y: 0.08, scale: 1 },
+          logo: { x: 0.16, y: 0.24, scale: 0.6, opacity: 1, rotation: 0 },
+          title: { x: 0.55, y: 0.72, scale: 0.8, opacity: 1, rotation: 0 },
+          subtitle: { x: 0.5, y: 0.9, scale: 0.9, opacity: 1, rotation: 0 },
+          watermark: { x: 0.5, y: 0.08, scale: 1, opacity: 1, rotation: 0 },
         },
       }),
       // 5) 自定义元素三种形态
@@ -57,20 +57,20 @@ describe.skipIf(!existsSync(FONT_PATH))('视觉快照产物', () => {
         customElements: [
           {
             id: 't1', kind: 'text', content: '', text: '文字元素',
-            size: 40, anchor: { x: 0.5, y: 0.16, scale: 1 },
-            color: '#39c5bb', bold: true, tracking: 0.1, rotation: 0,
+            size: 40, anchor: { x: 0.5, y: 0.16, scale: 1, opacity: 1, rotation: 0 },
+            color: '#39c5bb', bold: true, tracking: 0.1, curve: 0, direction: 'horizontal' as const, aspect: 1,
           },
           {
             id: 'i1', kind: 'image', content: LOGO, text: '',
-            size: 90, anchor: { x: 0.12, y: 0.84, scale: 1 },
-            color: '#ffffff', bold: false, tracking: 0, rotation: 0,
+            size: 90, anchor: { x: 0.12, y: 0.84, scale: 1, opacity: 1, rotation: 0 },
+            color: '#ffffff', bold: false, tracking: 0, curve: 0, direction: 'horizontal' as const, aspect: 1,
           },
           {
             id: 's1', kind: 'svg',
             content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 24">' +
               '<rect width="48" height="24" rx="4" fill="#ffffff"/></svg>',
-            text: '', size: 120, anchor: { x: 0.88, y: 0.84, scale: 1 },
-            color: '#ffffff', bold: false, tracking: 0, rotation: 0,
+            text: '', size: 120, anchor: { x: 0.88, y: 0.84, scale: 1, opacity: 1, rotation: 0 },
+            color: '#ffffff', bold: false, tracking: 0, curve: 0, direction: 'horizontal' as const, aspect: 1,
           },
         ],
       }),

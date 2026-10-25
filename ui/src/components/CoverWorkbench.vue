@@ -10,8 +10,11 @@ import { describeCanvas } from '../lib/canvasPresets'
 import { coverAttachmentFileName, downloadPng, downloadSvg, svgFileName, svgToPngBlob } from '../lib/exporters'
 import { updatePostCover, uploadCoverPng, type PostSummary } from '../api/haloClient'
 import { BUILTIN_FONT_URL } from '../lib/fontLoader'
-import { normalizeAnchor } from '../lib/layout'
-import { useCanvasInteraction, type SelectionId } from '../composables/useCanvasInteraction'
+import { CANVAS, normalizeAnchor } from '../lib/layout'
+import type { Anchor } from '../lib/types'
+import {
+  anchorOfTargets, useCanvasInteraction, type AnchorPatch, type SelectionId,
+} from '../composables/useCanvasInteraction'
 import ControlPanel from './ControlPanel.vue'
 import CoverPreview from './CoverPreview.vue'
 import OutputBar from './OutputBar.vue'
@@ -32,8 +35,9 @@ const props = withDefaults(
 const state = useCoverState()
 
 /**
- * 画布交互。元素只能从「元素」面板选中（画布是纯预览，用户裁定），
- * 这里提供选中态与键盘微调：方向键 1 步、Shift 10 步。
+ * 画布交互。选中态只有这一份:面板点选与画布上按下元素都写到这里
+ * (画布上按住元素即可拖动,未选中的元素先选中再拖)。
+ * 这里另提供键盘微调:方向键 1 步、Shift 10 步。
  */
 // 解构取得顶层 ref：嵌套在对象里的 ref 在模板中不会自动解包
 const {
@@ -42,13 +46,43 @@ const {
   nudge: nudgeCanvas,
 } = useCanvasInteraction()
 
-/** 选中目标的锚点写入:内置元素进 layout,自定义元素进 customElements */
-function applyAnchor(id: SelectionId, next: { x: number; y: number; scale?: number }) {
-  const anchor = normalizeAnchor({
-    x: next.x,
-    y: next.y,
-    scale: next.scale ?? anchorScaleOf(id),
-  })
+/**
+ * 标题字号的取值域。
+ *
+ * 直接从 layout 的画布常量派生（面板「大小」滑杆用的 64/210 也声明与它们一致），
+ * 免得这份边界在第三个地方又抄一遍然后各自漂移。
+ */
+const TITLE_FONT_MIN = CANVAS.TITLE_MIN
+const TITLE_FONT_MAX = CANVAS.TITLE_BASE
+
+/** 选中目标的锚点写入:内置元素进 layout,自定义元素进 customElements。
+ *
+ * 以现有锚点为底、只覆盖本次改动的字段:拖动/滚轮/键盘只改位置与倍率,
+ * 若从零构造锚点对象,后加的透明度与旋转会被一并抹回默认值。
+ */
+function applyAnchor(id: SelectionId, next: AnchorPatch) {
+  const base = anchorOfId(id)
+  if (!base) return
+  const x = next.x ?? base.x
+  const y = next.y ?? base.y
+
+  // 标题的「大小」由 titleFontSize 独家承担(面板那条滑杆写的就是它,并把倍率归位 1)。
+  // 若照其他元素那样写 anchor.scale,滚轮只动到「可用宽度预算」,短标题几乎看不出变化。
+  if (id === 'title' && next.scale !== undefined && next.scale !== base.scale) {
+    const ratio = base.scale > 0 ? next.scale / base.scale : 1
+    // 先把存档里可能不为 1 的倍率折算进字号再乘本次比值:归位倍率时观感大小不跳变
+    const fontSize = Math.min(
+      TITLE_FONT_MAX,
+      Math.max(TITLE_FONT_MIN, Math.round(state.value.titleFontSize * base.scale * ratio)),
+    )
+    // 已顶到字号上下限:值没变,重渲染与存档写入都是白费
+    if (fontSize === state.value.titleFontSize && base.scale === 1) return
+    state.value.titleFontSize = fontSize
+    state.value.layout = { ...state.value.layout, title: normalizeAnchor({ ...base, x, y, scale: 1 }) }
+    return
+  }
+
+  const anchor = normalizeAnchor({ ...base, x, y, scale: next.scale ?? base.scale })
   if (id.startsWith('custom:')) {
     const target = id.slice('custom:'.length)
     state.value.customElements = state.value.customElements.map((el) =>
@@ -59,19 +93,21 @@ function applyAnchor(id: SelectionId, next: { x: number; y: number; scale?: numb
   state.value.layout = { ...state.value.layout, [id as keyof typeof state.value.layout]: anchor }
 }
 
-function anchorScaleOf(id: SelectionId): number {
-  if (id.startsWith('custom:')) {
-    const target = id.slice('custom:'.length)
-    return state.value.customElements.find((el) => el.id === target)?.anchor.scale ?? 1
-  }
-  return state.value.layout[id as keyof typeof state.value.layout].scale
+/** 取某选中目标的完整锚点(内置元素在 layout,自定义元素在 customElements) */
+function anchorOfId(id: SelectionId): Anchor | null {
+  return anchorOfTargets(state.value, id)
 }
 
 /** 键盘微调:方向键 1 步、Shift 10 步;无选中时不拦截按键 */
 function onCanvasKeydown(ev: KeyboardEvent) {
-  const next = nudgeCanvas(ev, state.value.layout)
+  const next = nudgeCanvas(ev, state.value)
   if (!next) return
   applyAnchor(next.id, next.anchor)
+}
+
+/** 画布交互开始/结束:交互期间预览跟手,结束后回到 150ms 合帧 */
+function onCanvasInteracting(on: boolean) {
+  canvasInteracting.value = on
 }
 
 /**
@@ -179,10 +215,38 @@ const svg = computed(() =>
 const PREVIEW_DEBOUNCE_MS = 150
 const previewSvg = ref(svg.value)
 let previewTimer: ReturnType<typeof setTimeout> | undefined
+
+/** 立刻落到预览:清掉待触发的合帧,避免随后被一帧旧值盖回去 */
+function flushPreview(v: string) {
+  if (previewTimer) {
+    clearTimeout(previewTimer)
+    previewTimer = undefined
+  }
+  previewSvg.value = v
+}
+
+/**
+ * 画布交互(拖动/滚轮)进行中。
+ *
+ * 防抖是为「打字时不逐字符重渲染」服务的,但拖动期间它会让图元落后于指针
+ * (框走了、字还在原地,看起来就是卡顿)。交互期间直接渲染,交互一结束即恢复防抖。
+ */
+const canvasInteracting = ref(false)
+
 watch(svg, (v) => {
+  if (canvasInteracting.value) {
+    flushPreview(v)
+    return
+  }
   if (previewTimer) clearTimeout(previewTimer)
   previewTimer = setTimeout(() => { previewSvg.value = v }, PREVIEW_DEBOUNCE_MS)
 })
+
+// 交互结束补上最后一帧:状态写入与结束信号可能落在同一拍,不能留下 150ms 的空窗
+watch(canvasInteracting, (on) => {
+  if (!on) flushPreview(svg.value)
+})
+
 onBeforeUnmount(() => {
   if (previewTimer) clearTimeout(previewTimer)
 })
@@ -366,6 +430,10 @@ const permalinkHref = computed(() =>
             :selected="canvasSelection"
             :font="font"
             :has-logo="!!(state.logoDataUrl || defaultLogoDataUrl)"
+            :guides="state.smartGuides"
+            @select="selectCanvas"
+            @anchor="applyAnchor"
+            @interacting="onCanvasInteracting"
           ></CanvasOverlay>
         </CoverPreview>
       </div>

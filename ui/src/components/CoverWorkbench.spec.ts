@@ -1,10 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { axiosInstance } from '@halo-dev/api-client'
 import CoverWorkbench from './CoverWorkbench.vue'
 import CoverPreview from './CoverPreview.vue'
 import { BUILTIN_FONT_URL } from '../lib/fontLoader'
+import { defaultCoverState } from '../lib/layout'
+import type { CoverState, CustomElement, CustomKind } from '../lib/types'
 import { STORAGE_KEY, persistError } from '../composables/useCoverState'
 import { pluginSettingsDegraded } from '../composables/usePluginSettings'
 import { svgToPngBlob } from '../lib/exporters'
@@ -336,7 +338,7 @@ describe('CoverWorkbench', () => {
     wrapper.unmount()
   })
 
-  it('C2: 选高清(2x)后画布 2400×1260,默认标准 1200×630,附件上传仍为 1x', async () => {
+  it('C2: 选高清(2x)后画布按出厂分辨率翻倍(1200×675 ⇒ 2400×1350),附件上传仍为 1x', async () => {
     vi.mocked(svgToPngBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
     const wrapper = await mountExportable()
 
@@ -375,11 +377,11 @@ describe('CoverWorkbench', () => {
     vi.useFakeTimers()
     try {
       const pngBtn = () => wrapper.findAll('button').find((b) => b.text().startsWith('下载 PNG'))!
-      // 默认 PNG:1x ⇒ 1200×630
+      // 默认 PNG:1x ⇒ 出厂分辨率(2.0.0 起为宽屏 1200×675,不再是 1200×630)
       await pngBtn().trigger('click')
       await flushPromises()
       expect(canvases[0]?.width).toBe(1200)
-      expect(canvases[0]?.height).toBe(630)
+      expect(canvases[0]?.height).toBe(675)
       vi.advanceTimersByTime(2500)
       await nextTick() // 反馈复原,按钮文案恢复可按原文案检索
 
@@ -390,7 +392,7 @@ describe('CoverWorkbench', () => {
       await pngBtn().trigger('click')
       await flushPromises()
       expect(canvases[1]?.width).toBe(2400) // 1200 × 2
-      expect(canvases[1]?.height).toBe(1260) // 630 × 2
+      expect(canvases[1]?.height).toBe(1350) // 675 × 2
       vi.advanceTimersByTime(2500)
       await nextTick()
 
@@ -403,7 +405,7 @@ describe('CoverWorkbench', () => {
       expect(vi.mocked(svgToPngBlob)).toHaveBeenCalledTimes(1)
       expect(vi.mocked(svgToPngBlob)).toHaveBeenLastCalledWith(
         expect.any(String),
-        expect.objectContaining({ width: 1200, height: 630 }),
+        expect.objectContaining({ width: 1200, height: 675 }),
       )
       wrapper.unmount()
     } finally {
@@ -833,5 +835,365 @@ describe('CoverWorkbench', () => {
     } finally {
       pluginSettingsDegraded.value = false // 模块级信号,复位避免污染后续用例
     }
+  })
+
+  /**
+   * 预览交互(拖动改位置 / 滚轮改大小 / 智能参考线)。
+   *
+   * 手势落在预览层,但要断言的是工作台状态:「元素」面板里的回显值就是
+   * state.layout / customElements 的直接投影,因此用它来读最终结果,
+   * 而不是断言某个事件发出过、某个函数被调用过。
+   */
+  describe('预览交互', () => {
+    /** 预览交互层矩形桩成画布尺寸:指针的 clientX/clientY 于是与画布像素一一对应 */
+    function stubOverlay(wrapper: VueWrapper) {
+      const canvas = defaultCoverState().canvas
+      wrapper.find('.ov').element.getBoundingClientRect = () => ({
+        left: 0, top: 0, width: canvas.width, height: canvas.height,
+        right: canvas.width, bottom: canvas.height, x: 0, y: 0, toJSON: () => ({}),
+      }) as DOMRect
+      return canvas
+    }
+
+    /** 派发原生指针事件(VTU 的 trigger 无法注入 clientX:jsdom 里那是只读访问器) */
+    function pointer(wrapper: VueWrapper, type: string, init: { clientX?: number; clientY?: number } = {}) {
+      const ev = new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, ...init })
+      wrapper.find('.ov').element.dispatchEvent(ev)
+      return ev
+    }
+
+    function wheel(wrapper: VueWrapper, deltaY: number) {
+      const ev = new WheelEvent('wheel', { deltaY, cancelable: true, bubbles: true })
+      wrapper.find('.ov').element.dispatchEvent(ev)
+      return ev
+    }
+
+    function builtinRow(wrapper: VueWrapper, name: string) {
+      return wrapper.findAll('button.el-row').find((b) => b.find('.el-kind').text() === name)!
+    }
+
+    /** 元素面板里某内置元素的回显:x% / y% / 大小% */
+    function anchorsOf(wrapper: VueWrapper, name: string): number[] {
+      const text = builtinRow(wrapper, name).find('.el-meta').text()
+      return [...text.matchAll(/(\d+)%/g)].map((m) => Number(m[1]))
+    }
+
+    async function mountStage() {
+      const wrapper = mount(CoverWorkbench, { attachTo: document.body })
+      await flushPromises()
+      return { wrapper, canvas: stubOverlay(wrapper) }
+    }
+
+    /**
+     * 预置一条存档(以出厂状态铺底,只覆盖本用例关心的字段)。
+     * 「元素」面板只在存在自定义元素时才渲染它的位置滑杆，命中测试也需要它在场。
+     */
+    function seedArchive(patch: Partial<CoverState>) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...defaultCoverState(), ...patch }))
+    }
+
+    function customElementOf(kind: CustomKind): CustomElement {
+      return {
+        id: 'el-seed',
+        kind,
+        content: kind === 'image' ? 'data:image/png;base64,AAAA' : '',
+        text: kind === 'text' ? '自定义文字' : '',
+        size: kind === 'text' ? 60 : 200,
+        anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 },
+        color: '#ffffff',
+        bold: false,
+        tracking: 0,
+        curve: 0,
+        direction: 'horizontal',
+        aspect: 1,
+      }
+    }
+
+    /** 含一个自定义元素的存档：image 便于命中测试，text 才会渲染「大小」滑杆 */
+    function seedCustomElement(kind: CustomKind = 'image') {
+      const base = defaultCoverState()
+      seedArchive({
+        customElements: [customElementOf(kind)],
+        layers: [...base.layers, 'custom:el-seed'],
+      })
+    }
+
+    /**
+     * 画布取 1200×630(缩放系数为 1)并指定标题字号：
+     * 于是标题在 SVG 里的 font-size 就等于 titleFontSize 本身，可以直接读。
+     */
+    function seedTitle(fontSize: number, patch: Partial<CoverState> = {}) {
+      seedArchive({
+        canvas: { width: 1200, height: 630 },
+        canvasPresetId: 'og',
+        titleFlow: '标题只有七个字',
+        titleFontSize: fontSize,
+        ...patch,
+      })
+    }
+
+    /** 标题在预览 SVG 里的实际字号(渲染值,不是状态值) */
+    function renderedTitleFontSize(wrapper: VueWrapper): number {
+      const match = /<text[^>]*font-size="([\d.]+)"/.exec(previewSvg(wrapper))
+      return Number(match?.[1])
+    }
+
+    /** 自定义元素的位置回显(详情区滑杆,面板与状态同源) */
+    const customX = (wrapper: VueWrapper) =>
+      (wrapper.find('input[aria-label="水平(数值)"]').element as HTMLInputElement).value
+
+    /** 预览当前渲染的 SVG(防抖与否看它) */
+    const previewSvg = (wrapper: VueWrapper) =>
+      wrapper.findComponent(CoverPreview).props('svg') as string
+
+    it('方向键微调仍然可用:选中后 Shift+方向键移动 10 步', async () => {
+      const { wrapper } = await mountStage()
+      await builtinRow(wrapper, '标题').trigger('click')
+      expect(anchorsOf(wrapper, '标题')).toEqual([50, 50, 100])
+
+      await wrapper.find('.stage-col').trigger('keydown', { key: 'ArrowRight', shiftKey: true })
+
+      expect(anchorsOf(wrapper, '标题')).toEqual([51, 50, 100])
+      wrapper.unmount()
+    })
+
+    it('在预览上按住元素拖动:位置随指针改变,未选中时先选中再拖', async () => {
+      const { wrapper, canvas } = await mountStage()
+
+      pointer(wrapper, 'pointerdown', { clientX: canvas.width * 0.5, clientY: canvas.height * 0.5 })
+      await nextTick()
+      // 按下即选中:面板里该行呈选中态
+      expect(builtinRow(wrapper, '标题').attributes('aria-pressed')).toBe('true')
+      pointer(wrapper, 'pointermove', { clientX: canvas.width * 0.7, clientY: canvas.height * 0.5 })
+      await nextTick()
+
+      expect(anchorsOf(wrapper, '标题')).toEqual([70, 50, 100])
+      pointer(wrapper, 'pointerup')
+      wrapper.unmount()
+    })
+
+    it('拖动坐标夹在 0–100%:拖出预览范围也不会跑出画布', async () => {
+      const { wrapper, canvas } = await mountStage()
+
+      pointer(wrapper, 'pointerdown', { clientX: canvas.width * 0.5, clientY: canvas.height * 0.5 })
+      await nextTick()
+      pointer(wrapper, 'pointermove', { clientX: canvas.width * 3, clientY: canvas.height * 3 })
+      await nextTick()
+
+      expect(anchorsOf(wrapper, '标题')).toEqual([100, 100, 100])
+      pointer(wrapper, 'pointerup')
+      wrapper.unmount()
+    })
+
+    it('选中元素后滚轮改变大小:上滚变大且落在整数百分比', async () => {
+      const { wrapper } = await mountStage()
+      // 用 Logo 验收「倍率」这条路：标题的大小走 titleFontSize，另有专门用例
+      await builtinRow(wrapper, 'Logo').trigger('click')
+
+      const ev = wheel(wrapper, -100)
+      await nextTick()
+
+      expect(anchorsOf(wrapper, 'Logo')).toEqual([50, 50, 102])
+      expect(ev.defaultPrevented).toBe(true) // 阻止页面滚动
+      wrapper.unmount()
+    })
+
+    it('没有选中元素时滚轮完全不介入:不改大小、也不阻止页面滚动', async () => {
+      const { wrapper } = await mountStage()
+
+      const ev = wheel(wrapper, -100)
+      await nextTick()
+
+      expect(anchorsOf(wrapper, '标题')).toEqual([50, 50, 100])
+      expect(ev.defaultPrevented).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('智能参考线:开启后吸附到画布中线并画出细线,松手后消失;关闭时不吸附', async () => {
+      const { wrapper, canvas } = await mountStage()
+      const centerY = canvas.height * 0.5
+
+      // 关闭(出厂默认):原始位置原样写回 —— 50.55% 不会被吸到 50%
+      pointer(wrapper, 'pointerdown', { clientX: canvas.width * 0.5, clientY: centerY })
+      await nextTick()
+      pointer(wrapper, 'pointermove', { clientX: canvas.width * 0.5055, clientY: centerY })
+      await nextTick()
+      expect(anchorsOf(wrapper, '标题')[0]).toBe(51) // round(50.55)
+      expect(wrapper.findAll('.guide')).toHaveLength(0)
+      pointer(wrapper, 'pointerup')
+      await nextTick()
+
+      // 打开「智能参考线」开关
+      const toggle = wrapper.findAll('label').find((l) => l.text().includes('智能参考线'))!
+      await toggle.find('input').setValue(true)
+
+      // 再拖一次:起点即当前位置(50.55%)，已在 0.6% 阈值内 ⇒ 吸附到 50%
+      const startX = canvas.width * 0.5055
+      pointer(wrapper, 'pointerdown', { clientX: startX, clientY: centerY })
+      await nextTick()
+      pointer(wrapper, 'pointermove', { clientX: startX - 2, clientY: centerY })
+      await nextTick()
+
+      expect(anchorsOf(wrapper, '标题')[0]).toBe(50)
+      const xGuides = wrapper.findAll('.guide-x')
+      expect(xGuides).toHaveLength(1) // 画布居中垂直线
+      expect((xGuides[0].element as unknown as HTMLElement).style.left).toBe('50%')
+
+      pointer(wrapper, 'pointerup')
+      await nextTick()
+      expect(wrapper.findAll('.guide')).toHaveLength(0) // 松手即消失
+      expect(anchorsOf(wrapper, '标题')[0]).toBe(50) // 位置留在吸附结果上
+      wrapper.unmount()
+    })
+
+    it('自定义元素拖动写回它自己的锚点(不在内置布局表里)', async () => {
+      // 面板只在存在自定义元素时才渲染它的位置滑杆，故先预置一条含自定义元素的存档
+      seedCustomElement()
+      const { wrapper, canvas } = await mountStage()
+
+      // 自定义元素叠在中心且图层最上 ⇒ 按下命中的是它
+      pointer(wrapper, 'pointerdown', { clientX: canvas.width * 0.5, clientY: canvas.height * 0.5 })
+      await nextTick()
+      pointer(wrapper, 'pointermove', { clientX: canvas.width * 0.6, clientY: canvas.height * 0.5 })
+      await nextTick()
+      pointer(wrapper, 'pointerup')
+
+      expect(customX(wrapper)).toBe('60')
+      wrapper.unmount()
+    })
+
+    it('自定义元素的方向键微调同样生效:写回 customElements 而不是内置 layout', async () => {
+      seedCustomElement()
+      const { wrapper } = await mountStage()
+      // 从面板选中自定义元素（与画布命中无关）
+      await wrapper.find('button.el-name').trigger('click')
+      expect(customX(wrapper)).toBe('50')
+
+      await wrapper.find('.stage-col').trigger('keydown', { key: 'ArrowRight', shiftKey: true })
+
+      expect(customX(wrapper)).toBe('51')
+      // 内置元素一动不动：写回的是自定义元素自己的锚点
+      expect(anchorsOf(wrapper, '标题')).toEqual([50, 50, 100])
+      wrapper.unmount()
+    })
+
+    it('拖动期间预览立即跟手(不等 150ms 合帧),松手后防抖恢复', async () => {
+      const { wrapper, canvas } = await mountStage()
+      const before = previewSvg(wrapper)
+
+      pointer(wrapper, 'pointerdown', { clientX: canvas.width * 0.5, clientY: canvas.height * 0.5 })
+      await nextTick()
+      pointer(wrapper, 'pointermove', { clientX: canvas.width * 0.7, clientY: canvas.height * 0.5 })
+      await nextTick()
+
+      // 拖动中:预览已经落在新位置上，而不是等 G1 的 150ms 合帧
+      expect(previewSvg(wrapper)).not.toBe(before)
+
+      pointer(wrapper, 'pointerup')
+      await nextTick()
+      const settled = previewSvg(wrapper)
+
+      // 松手后恢复防抖:打字在合帧窗口内不重渲染,窗口过去才追平
+      await wrapper.find('input[aria-label="整块标题"]').setValue('拖动之后')
+      await nextTick()
+      expect(previewSvg(wrapper)).toBe(settled)
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 250))
+      expect(previewSvg(wrapper)).not.toBe(settled)
+      wrapper.unmount()
+    }, 5000)
+
+    it('滚轮改大小时预览同样立即跟手', async () => {
+      const { wrapper } = await mountStage()
+      // 用副标题验收：它的字号直接按倍率缩放，改倍率必然改变图元
+      //（标题的倍率只影响可用宽度预算，短标题下改 2% 看不出差别，另有用例断言状态）
+      await wrapper.find('input[aria-label="副标题"]').setValue('副标题')
+      await new Promise<void>((resolve) => setTimeout(resolve, 250)) // 等打字那一帧合完
+      await builtinRow(wrapper, '副标题').trigger('click')
+      const before = previewSvg(wrapper)
+
+      wheel(wrapper, -100)
+      await nextTick()
+
+      expect(anchorsOf(wrapper, '副标题')[2]).toBe(52) // 出厂 50% → 52%
+      expect(previewSvg(wrapper)).not.toBe(before)
+      wrapper.unmount()
+    }, 5000)
+
+    it('滚轮在标题上改的是字号:图元真的变大/变小,倍率仍归位为 1', async () => {
+      seedTitle(105)
+      const { wrapper } = await mountStage()
+      await builtinRow(wrapper, '标题').trigger('click')
+      expect(renderedTitleFontSize(wrapper)).toBe(105)
+
+      wheel(wrapper, -100) // 上滚一格 ⇒ +2%
+      await nextTick()
+      expect(renderedTitleFontSize(wrapper)).toBe(107) // round(105 × 1.02)
+      // 大小由 titleFontSize 独家承担：锚点倍率保持 1，否则会与字号双重放大
+      expect(anchorsOf(wrapper, '标题')).toEqual([50, 50, 100])
+
+      wheel(wrapper, 100) // 下滚一格 ⇒ −2%
+      await nextTick()
+      expect(renderedTitleFontSize(wrapper)).toBe(105) // 以当前字号为基准，不会「回不去」
+      expect(anchorsOf(wrapper, '标题')).toEqual([50, 50, 100])
+      wrapper.unmount()
+    })
+
+    it('滚轮在标题上夹在 64–210:顶到上限不再变化,也不会越界', async () => {
+      seedTitle(208)
+      const atMax = await mountStage()
+      await builtinRow(atMax.wrapper, '标题').trigger('click')
+
+      wheel(atMax.wrapper, -100) // 208 × 1.02 = 212.16 ⇒ 夹到 210
+      await nextTick()
+      expect(renderedTitleFontSize(atMax.wrapper)).toBe(210)
+
+      wheel(atMax.wrapper, -100) // 已在 210：不再写回，仍是 210
+      await nextTick()
+      expect(renderedTitleFontSize(atMax.wrapper)).toBe(210)
+      atMax.wrapper.unmount()
+
+      seedTitle(64)
+      const atMin = await mountStage()
+      await builtinRow(atMin.wrapper, '标题').trigger('click')
+
+      wheel(atMin.wrapper, 100) // 64 × 0.98 = 62.72 ⇒ 夹到 64
+      await nextTick()
+      expect(renderedTitleFontSize(atMin.wrapper)).toBe(64)
+      atMin.wrapper.unmount()
+    })
+
+    it('滚轮在副标题/水印/自定义元素上仍写各自的锚点倍率(不受标题折算影响)', async () => {
+      const base = defaultCoverState()
+      // 自定义元素取 text 类型：只有它才渲染「大小」滑杆，倍率才有可见回显
+      seedTitle(105, {
+        customElements: [customElementOf('text')],
+        layers: [...base.layers, 'custom:el-seed'],
+      })
+      const { wrapper } = await mountStage()
+
+      // 副标题：出厂 50% → 52%
+      await builtinRow(wrapper, '副标题').trigger('click')
+      wheel(wrapper, -100)
+      await nextTick()
+      expect(anchorsOf(wrapper, '副标题')).toEqual([50, 80, 52])
+
+      // 水印：出厂 100% → 102%
+      await builtinRow(wrapper, '水印').trigger('click')
+      wheel(wrapper, -100)
+      await nextTick()
+      expect(anchorsOf(wrapper, '水印')).toEqual([95, 95, 102])
+
+      // 自定义元素：同样写自己的 anchor.scale
+      await wrapper.find('button.el-name').trigger('click')
+      wheel(wrapper, -100)
+      await nextTick()
+      const sizeInput = wrapper.find('input[aria-label="大小(数值)"]')
+      expect((sizeInput.element as HTMLInputElement).value).toBe('102')
+
+      // 标题字号不受这些滚动影响
+      expect(renderedTitleFontSize(wrapper)).toBe(105)
+      wrapper.unmount()
+    })
   })
 })

@@ -44,6 +44,16 @@ function rotateAbout(inner: string, deg: number, cx: number, cy: number): string
   return `<g transform="rotate(${r2(d)} ${r2(cx)} ${r2(cy)})">${inner}</g>`
 }
 
+/** 元素不透明度；100% 时原样返回，同样避免多包一层 */
+function withOpacity(inner: string, opacity: number): string {
+  if (!inner) return ''
+  const o = typeof opacity === 'number' && Number.isFinite(opacity)
+    ? Math.min(1, Math.max(0, opacity))
+    : 1
+  if (o >= 1) return inner
+  return `<g opacity="${r2(o)}">${inner}</g>`
+}
+
 /** 各元素的横向锚定方式：Logo 居中、标题居中（分缝时锚点即中缝）、水印右对齐 */
 const ALIGN: Record<'logo' | 'title' | 'subtitle' | 'watermark', AnchorAlign> = {
   logo: 'middle',
@@ -303,7 +313,9 @@ function titleLayer(
   const budget = vertical ? 0 : maxW
   const trackOf = (fs: number) => fs * ts.tracking
   /** 收尾:先加投影,再绕锚点整体旋转 */
-  const finish = (inner: string) => rotateAbout(wrap(inner), ts.rotation, cx, baseline)
+  const finish = (inner: string) => withOpacity(
+    rotateAbout(wrap(inner), ax.rotation, cx, baseline), ax.opacity,
+  )
   // 两种排版各有独立文本：整块模式只看 titleFlow，分缝模式只看左右两段
   const hasText = state.titleMode === 'flow' ? !!flow : !!(left || right)
 
@@ -313,7 +325,7 @@ function titleLayer(
     const phSize = byHeight(160, ctx.s)
     const ph = layoutRun(
       font, '标题标题', cx, baseline, phSize, trackOf(phSize),
-      '#ffffff', 'middle', true, budget, layout,
+      ts.color, 'middle', ts.bold, budget, layout,
     )
     return finish(`<g opacity="0.4">${ph}</g>`)
   }
@@ -327,7 +339,7 @@ function titleLayer(
     const rendered = lines
       .map((line, i) => layoutRun(
         font, line, cx, firstBaseline + i * lineHeight, base, trackOf(base),
-        '#ffffff', 'middle', true, budget, layout,
+        ts.color, 'middle', ts.bold, budget, layout,
       ))
       .join('')
     return finish(rendered)
@@ -341,7 +353,7 @@ function titleLayer(
       : fitFontSize(joined, maxW, { base, min: minSize }, measure)
     return finish(layoutRun(
       font, joined, cx, baseline, fontSize, trackOf(fontSize),
-      '#ffffff', 'middle', true, budget, layout,
+      ts.color, 'middle', ts.bold, budget, layout,
     ))
   }
 
@@ -371,11 +383,11 @@ function titleLayer(
   const half = byWidth(state.seamGap, ctx.s) / 2
   const leftText = left
     ? layoutRun(font, left, cx - half, baseline, size, trackOf(size),
-        '#ffffff', 'end', true, segBudget, layout, compress)
+        ts.color, 'end', ts.bold, segBudget, layout, compress)
     : ''
   const rightText = right
     ? layoutRun(font, right, cx + half, baseline, size, trackOf(size),
-        '#ffffff', 'start', true, segBudget, layout, compress)
+        ts.color, 'start', ts.bold, segBudget, layout, compress)
     : ''
   return finish(leftText + rightText)
 }
@@ -490,7 +502,7 @@ function subTitleLayer(
     ? { fontSize: subBase }
     : fitFontSize(sub, textMax, { base: subBase, min: subMin }, mTracked)
   const text = layoutRun(font, sub, cx, baseline, fontSize, trackPxOf(fontSize),
-    '#ffffff', 'middle', true, textMax, layout)
+    ts.color, 'middle', ts.bold, textMax, layout)
   // 装饰线只在横排出现：竖排是一列字，两侧横线会横穿列身
   const sideLines = vertical ? '' : (() => {
     // 被压缩时装饰线必须贴压缩后的实际宽，否则跑出画布
@@ -505,9 +517,12 @@ function subTitleLayer(
       `</g>`
   })()
   // 文字带轻投影；装饰线不进投影组（2px 细线会被投影糊出明显边缘）
-  return rotateAbout(
-    `<g filter="url(#sub-shadow)" opacity="0.9">${text}</g>${sideLines}`,
-    ts.rotation, cx, baseline,
+  return withOpacity(
+    rotateAbout(
+      `<g filter="url(#sub-shadow)" opacity="0.9">${text}</g>${sideLines}`,
+      ax.rotation, cx, baseline,
+    ),
+    ax.opacity,
   )
 }
 
@@ -516,10 +531,16 @@ function logoLayer(url: string, ax: Anchor, ctx: Ctx): string {
   const a = normalizeAnchor(ax)
   const { x, y } = px(a, ctx)
   const size = logoSizeOf(a, ctx)
-  return `<g filter="url(#logo-shadow)"><image href="${esc(url)}" xlink:href="${esc(url)}" ` +
-    `x="${r2(x - size / 2)}" y="${r2(y - size / 2)}" ` +
-    `width="${r2(size)}" height="${r2(size)}" ` +
-    `clip-path="url(#logo-clip)"/></g>`
+  return withOpacity(
+    rotateAbout(
+      `<g filter="url(#logo-shadow)"><image href="${esc(url)}" xlink:href="${esc(url)}" ` +
+      `x="${r2(x - size / 2)}" y="${r2(y - size / 2)}" ` +
+      `width="${r2(size)}" height="${r2(size)}" ` +
+      `clip-path="url(#logo-clip)"/></g>`,
+      a.rotation, x, y,
+    ),
+    a.opacity,
+  )
 }
 
 /** 域名水印：白色 65%，带字距，无投影；超宽时与标题/副标题一致整体压缩 */
@@ -537,8 +558,11 @@ function watermarkLayer(
   // 竖排按纵向堆叠，横向宽度预算不适用
   const maxW = ts.direction === 'vertical' ? 0 : watermarkMaxWidth(ctx) * ax.scale
   const text = layoutRun(font, wm, x, y, size, trackPx,
-    '#ffffff', ALIGN.watermark, true, maxW, layout)
-  return rotateAbout(`<g opacity="0.65">${text}</g>`, ts.rotation, x, y)
+    ts.color, ALIGN.watermark, ts.bold, maxW, layout)
+  return withOpacity(
+    rotateAbout(`<g opacity="0.65">${text}</g>`, ax.rotation, x, y),
+    ax.opacity,
+  )
 }
 
 /** 元素实际尺寸：文字按字号、图形按边长，命中框与渲染共用此换算 */
@@ -558,28 +582,34 @@ function customElementLayer(
     if (!text) return ''
     const size = customElementSize(el, ctx)
     const trackPx = size * el.tracking
-    const maxW = customTextMaxWidth(ctx) * a.scale
-    const lines = wrapText(text, maxW, size, measure, trackPx)
+    const vertical = el.direction === 'vertical'
+    // 竖排不做横向断行：每行都会变成一列，断行只会得到一排并列的短列（与标题同一条规则）
+    const maxW = vertical ? 0 : customTextMaxWidth(ctx) * a.scale
+    const lines = vertical ? text.split('\n') : wrapText(text, maxW, size, measure, trackPx)
     const lineHeight = Math.round(size * 1.18)
     const firstBaseline = y - ((lines.length - 1) * lineHeight) / 2
     const body = lines
       .map((line, i) => layoutRun(
-        font, line, x, firstBaseline + i * lineHeight, size, trackPx, el.color, 'middle', el.bold, maxW,
+        font, line, x, firstBaseline + i * lineHeight, size, trackPx,
+        el.color, 'middle', el.bold, maxW, { curve: el.curve, direction: el.direction },
       ))
       .join('')
-    return rotateAbout(`<g>${body}</g>`, el.rotation, x, y)
+    return withOpacity(rotateAbout(`<g>${body}</g>`, a.rotation, x, y), a.opacity)
   }
 
   const size = customElementSize(el, ctx)
 
   if (el.kind === 'image') {
     if (!el.content) return ''
-    return rotateAbout(
+    // 保持原图比例：size 是宽度，高度按原图宽高比换算；preserveAspectRatio 取 meet，
+    // 即使宽高比未知（旧档没有 aspect）也只会留边，不会把图裁掉
+    const height = size / (el.aspect > 0 ? el.aspect : 1)
+    return withOpacity(rotateAbout(
       `<image href="${esc(el.content)}" xlink:href="${esc(el.content)}" ` +
-      `x="${r2(x - size / 2)}" y="${r2(y - size / 2)}" ` +
-      `width="${r2(size)}" height="${r2(size)}" preserveAspectRatio="xMidYMid slice"/>`,
-      el.rotation, x, y,
-    )
+      `x="${r2(x - size / 2)}" y="${r2(y - height / 2)}" ` +
+      `width="${r2(size)}" height="${r2(height)}" preserveAspectRatio="xMidYMid meet"/>`,
+      a.rotation, x, y,
+    ), a.opacity)
   }
 
   // svg 图标：录入时已过白名单；此处按 viewBox 等比缩放到目标尺寸，
@@ -593,9 +623,9 @@ function customElementLayer(
   const offsetY = -vy - vh / 2
   // color 是 color 属性的呈现属性,标记里的 currentColor 由它解析:
   // 图标按 currentColor 入库,颜色因此是渲染期输入,改色无需重取标记
-  return rotateAbout(
+  return withOpacity(rotateAbout(
     `<g color="${esc(el.color)}" transform="translate(${r2(x)} ${r2(y)}) scale(${r2(scale)}) ` +
     `translate(${r2(offsetX)} ${r2(offsetY)})">${inner}</g>`,
-    el.rotation, x, y,
-  )
+    a.rotation, x, y,
+  ), a.opacity)
 }

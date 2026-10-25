@@ -123,13 +123,13 @@ export function builtinBoxes(
           ]
       for (const seg of segments) {
         boxes.push(verticalTextBox(
-          'title', seg.label, seg.cx, baseline, seg.text, title.fontSize, trackPx, st.rotation,
+          'title', seg.label, seg.cx, baseline, seg.text, title.fontSize, trackPx, a.rotation,
         ))
       }
     } else if (state.titleMode === 'flow' || state.logoHidden) {
       boxes.push(boxOfText(
         'title', '标题', a, cx, baseline, title.totalWidth, title.fontSize,
-        title.lineCount, title.lineHeight, st.rotation, { x: cx, y: baseline },
+        title.lineCount, title.lineHeight, a.rotation, { x: cx, y: baseline },
       ))
     } else {
       // 分缝模式两侧各自命中：分别贴合自己那一段，便于单独拖动并保持中缝对齐
@@ -138,13 +138,13 @@ export function builtinBoxes(
       if (left) {
         boxes.push(boxOfText(
           'title', '标题(左)', a, cx - title.seamHalf - title.leftWidth / 2, baseline,
-          title.leftWidth, title.fontSize, 1, 0, st.rotation, { x: cx, y: baseline },
+          title.leftWidth, title.fontSize, 1, 0, a.rotation, { x: cx, y: baseline },
         ))
       }
       if (right) {
         boxes.push(boxOfText(
           'title', '标题(右)', a, cx + title.seamHalf + title.rightWidth / 2, baseline,
-          title.rightWidth, title.fontSize, 1, 0, st.rotation, { x: cx, y: baseline },
+          title.rightWidth, title.fontSize, 1, 0, a.rotation, { x: cx, y: baseline },
         ))
       }
     }
@@ -159,7 +159,7 @@ export function builtinBoxes(
     const maxW = (ctx.W * CANVAS.FULL_MAX_FRACTION) * a.scale
     if (st.direction === 'vertical') {
       boxes.push(verticalTextBox(
-        'subtitle', '副标题', a.x * ctx.W, a.y * ctx.H, sub, base, base * st.tracking, st.rotation,
+        'subtitle', '副标题', a.x * ctx.W, a.y * ctx.H, sub, base, base * st.tracking, a.rotation,
       ))
     } else {
       // 与 subTitleLayer 同源：按基准字号等比缩小到可用宽度，不放大
@@ -170,7 +170,7 @@ export function builtinBoxes(
       const lineGap = byWidth(CANVAS.SUB_LINE_GAP, ctx.s)
       const box = boxOfText(
         'subtitle', '副标题', a, a.x * ctx.W, a.y * ctx.H, width, fontSize, 1, 0,
-        st.rotation, { x: a.x * ctx.W, y: a.y * ctx.H },
+        a.rotation, { x: a.x * ctx.W, y: a.y * ctx.H },
       )
       // 计入两侧装饰线，命中范围与肉眼所见一致
       box.x -= lineW + lineGap
@@ -186,7 +186,7 @@ export function builtinBoxes(
     const fontSize = Math.max(12, Math.round(byHeight(CANVAS.WM_SIZE, ctx.s) * a.scale))
     if (st.direction === 'vertical') {
       boxes.push(verticalTextBox(
-        'watermark', '水印', a.x * ctx.W, a.y * ctx.H, wm, fontSize, fontSize * st.tracking, st.rotation,
+        'watermark', '水印', a.x * ctx.W, a.y * ctx.H, wm, fontSize, fontSize * st.tracking, a.rotation,
       ))
     } else {
       const maxW = watermarkMaxWidth(ctx) * a.scale
@@ -194,7 +194,7 @@ export function builtinBoxes(
       // 水印右对齐锚点：包围盒左边界须按锚点回推
       boxes.push(boxOfText(
         'watermark', '水印', a, a.x * ctx.W - width / 2, a.y * ctx.H, width, fontSize, 1, 0,
-        st.rotation, { x: a.x * ctx.W, y: a.y * ctx.H },
+        a.rotation, { x: a.x * ctx.W, y: a.y * ctx.H },
       ))
     }
   }
@@ -222,13 +222,17 @@ export function customBoxes(
       const lineHeight = Math.round(size * 1.18)
       const box = boxOfText(
         id, label, a, cx, cy, Math.min(width, maxW), size, lines.length, lineHeight,
-        el.rotation, { x: cx, y: cy },
+        a.rotation, { x: cx, y: cy },
       )
       return { ...box, elementId: el.id }
     }
     const size = customElementSize(el, ctx)
     let width = size
     let height = size
+    // 位图保持原图比例：此前宽高都取 size，等于把任何图都按正方形硬裁（实机反馈）
+    if (el.kind === 'image') {
+      height = size / (el.aspect > 0 ? el.aspect : 1)
+    }
     // SVG 图标按 viewBox 等比缩放，命中框随之贴合（非方形图标不套正方形框）
     if (el.kind === 'svg' && el.content.trim()) {
       const [, , vw, vh] = readViewBox(el.content)
@@ -243,7 +247,7 @@ export function customBoxes(
       width,
       height,
       centerY: cy,
-      rotation: el.rotation,
+      rotation: a.rotation,
       pivot: { x: cx, y: cy },
     }
   })

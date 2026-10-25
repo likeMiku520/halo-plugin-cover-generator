@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { FormKit } from '@formkit/vue'
-import type { AnchorKey, CoverState, CustomElement, CustomKind, LayerKey } from '../lib/types'
+import type { Anchor, AnchorKey, CoverState, CustomElement, CustomKind, LayerKey, TextTypography } from '../lib/types'
 import {
   CANVAS, REF_H, REF_W, TEXT_STYLE_LIMITS, defaultAnchors, defaultCoverState, defaultTextStyles,
-  normalizeAnchor,
+  normalizeAnchor, scaleLimitsOf,
 } from '../lib/layout'
 import { anchorLabel, type SelectionId } from '../composables/useCanvasInteraction'
 import { fetchLogoAsDataUrl } from '../lib/logoFetcher'
@@ -44,7 +44,7 @@ function set(patch: Partial<CoverState>) {
   emit('update:modelValue', { ...props.modelValue, ...patch })
 }
 
-function setAnchor(key: SelectionId, patch: { x?: number; y?: number; scale?: number }) {
+function setAnchor(key: SelectionId, patch: Partial<Anchor>) {
   if (key.startsWith('custom:')) {
     const id = key.slice('custom:'.length)
     set({
@@ -131,14 +131,32 @@ function updateTextStyle(patch: Partial<TextStyle>) {
 }
 
 /**
- * 「大小(%)」的取值范围按元素区分：副标题与水印都从 1% 起（用户要求能调到极小），
- * 水印上限 300%；其余（Logo / 自定义文字）维持 20–300 不变。
+ * 「大小(%)」的取值范围：映射本身在 layout 的 scaleLimitsOf，
+ * 面板与预览滚轮共用同一份，避免两处各写一套后漂移。
  */
-const scaleRange = computed(() => {
-  if (props.selected === 'subtitle') return { min: 1, max: 100 }
-  if (props.selected === 'watermark') return { min: 1, max: 300 }
-  return { min: 20, max: 300 }
+const scaleRange = computed(() => scaleLimitsOf(props.selected))
+
+/**
+ * 当前选中元素的文字排版读写。
+ *
+ * 内置三元素存在 state.textStyles，自定义文字元素存在元素自身的同名字段——
+ * 两边字段完全一致（共用 TextTypography），所以面板里只要一套文字控件，
+ * 「自定义文字元素拥有标题那套全部能力」也就不需要第二份实现。
+ */
+const activeTypo = computed<TextTypography | null>(() => {
+  if (activeTextStyle.value) return activeTextStyle.value
+  const el = activeElement.value
+  return el && el.kind === 'text' ? el : null
 })
+
+function writeTypo(patch: Partial<TextTypography>) {
+  if (activeTextStyle.value) {
+    updateTextStyle(patch)
+    return
+  }
+  const el = activeElement.value
+  if (el && el.kind === 'text') updateElement(el.id, patch)
+}
 
 const canMoveUp = computed(() =>
   activeLayerIndex.value >= 0 && activeLayerIndex.value < props.modelValue.layers.length - 1)
@@ -155,13 +173,13 @@ function moveLayer(delta: number) {
   set({ layers: list })
 }
 
-/** 重置位置：只把锚点归位，大小与排版样式不动 */
+/** 重置位置：只把锚点归位，大小、透明度与旋转都不动 */
 function resetLayout() {
   set({
     layout: defaultAnchors(),
     customElements: props.modelValue.customElements.map((el) => ({
       ...el,
-      anchor: { x: 0.5, y: 0.5, scale: 1 },
+      anchor: { ...el.anchor, x: 0.5, y: 0.5, scale: 1 },
     })),
   })
 }
@@ -181,9 +199,8 @@ function resetAllValues() {
     backgroundScrim: CANVAS.BACKGROUND_SCRIM,
     customElements: props.modelValue.customElements.map((el) => ({
       ...el,
-      anchor: { x: 0.5, y: 0.5, scale: 1 },
+      anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 },
       size: DEFAULT_ELEMENT_SIZE[el.kind],
-      rotation: 0,
     })),
   })
 }
@@ -212,11 +229,14 @@ function newElement(kind: CustomKind, patch: Partial<CustomElement> = {}): Custo
     content: '',
     text: kind === 'text' ? '点击下方可编辑文字' : '',
     size: DEFAULT_ELEMENT_SIZE[kind],
-    anchor: { x: 0.5, y: 0.5, scale: 1 },
+    anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 },
     color: '#ffffff',
-    bold: true,
+    // 出厂不加粗：内置字体本身已是粗体，开启加粗再由渲染层做合成加粗
+    bold: false,
     tracking: 0,
-    rotation: 0,
+    curve: 0,
+    direction: 'horizontal',
+    aspect: 1,
     ...patch,
   }
 }
@@ -265,14 +285,36 @@ async function onPickAttachmentImage(value: unknown) {
   elementError.value = ''
   elementNotice.value = false
   try {
-    appendElement(newElement('image', {
-      content: await fetchLogoAsDataUrl(link, () => { elementNotice.value = true }),
-    }))
+    const content = await fetchLogoAsDataUrl(link, () => { elementNotice.value = true })
+    appendElement(newElement('image', { content, aspect: await readImageAspect(content) }))
   } catch (e) {
     elementError.value = e instanceof Error ? e.message : '附件读取失败'
   } finally {
     busy.value = false
   }
+}
+
+/**
+ * 读原图宽高比。
+ *
+ * 位图不能一律按正方形渲染，否则竖图与横图都会被裁掉大半（实机反馈）。
+ * 这里等一次元数据就够，但要带兜底：格式异常或拿不到 load 事件（无头环境）
+ * 时也必须放行，不能让「添加图片」卡住。
+ */
+function readImageAspect(dataUrl: string, timeoutMs = 300): Promise<number> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (v: number) => {
+      if (settled) return
+      settled = true
+      resolve(v > 0 && Number.isFinite(v) ? v : 1)
+    }
+    const img = new Image()
+    img.onload = () => finish(img.naturalWidth / img.naturalHeight)
+    img.onerror = () => finish(1)
+    img.src = dataUrl
+    setTimeout(() => finish(1), timeoutMs)
+  })
 }
 
 /** 任何来源的 SVG 都经同一条白名单过滤后入库 */
@@ -470,33 +512,46 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
           />
         </div>
 
-        <template v-if="activeTextStyle">
-          <div class="sub-head">文字排版</div>
+        <!-- 透明度与旋转对所有元素通用（内置与自定义同一对滑杆），
+             因此不必按元素类型各写一套，也不会出现「某个元素没有这个功能」 -->
+        <div class="sub-head">外观</div>
+        <SliderField
+          :model-value="Math.round(activeAnchor.opacity * 100)"
+          :min="0"
+          :max="CANVAS.OPACITY_MAX"
+          :step="1"
+          label="透明度"
+          suffix="%"
+          @update:model-value="setAnchor(selected, { opacity: $event / 100 })"
+        />
+        <SliderField
+          :model-value="activeAnchor.rotation"
+          :min="TEXT_STYLE_LIMITS.ROTATION_MIN"
+          :max="TEXT_STYLE_LIMITS.ROTATION_MAX"
+          :step="5"
+          label="旋转"
+          suffix="°"
+          @update:model-value="setAnchor(selected, { rotation: $event })"
+        />
+
+        <template v-if="activeTypo">
+          <div class="sub-head">文字</div>
           <SliderField
-            :model-value="activeTextStyle.tracking"
+            :model-value="activeTypo.tracking"
             :min="TEXT_STYLE_LIMITS.TRACKING_MIN"
             :max="TEXT_STYLE_LIMITS.TRACKING_MAX"
             :step="0.01"
             label="字间距"
             suffix="em"
-            @update:model-value="updateTextStyle({ tracking: $event })"
+            @update:model-value="writeTypo({ tracking: $event })"
           />
           <SliderField
-            :model-value="activeTextStyle.curve"
+            :model-value="activeTypo.curve"
             :min="TEXT_STYLE_LIMITS.CURVE_MIN"
             :max="TEXT_STYLE_LIMITS.CURVE_MAX"
             :step="5"
             label="弯曲度"
-            @update:model-value="updateTextStyle({ curve: $event })"
-          />
-          <SliderField
-            :model-value="activeTextStyle.rotation"
-            :min="TEXT_STYLE_LIMITS.ROTATION_MIN"
-            :max="TEXT_STYLE_LIMITS.ROTATION_MAX"
-            :step="5"
-            label="旋转"
-            suffix="°"
-            @update:model-value="updateTextStyle({ rotation: $event })"
+            @update:model-value="writeTypo({ curve: $event })"
           />
           <div class="dir-row">
             <span class="sf-label">方向</span>
@@ -504,22 +559,41 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
               <button
                 type="button"
                 class="seg-btn"
-                :class="{ 'is-on': activeTextStyle.direction === 'horizontal' }"
-                :aria-pressed="activeTextStyle.direction === 'horizontal'"
-                @click="updateTextStyle({ direction: 'horizontal' })"
+                :class="{ 'is-on': activeTypo.direction === 'horizontal' }"
+                :aria-pressed="activeTypo.direction === 'horizontal'"
+                @click="writeTypo({ direction: 'horizontal' })"
               >
                 横排
               </button>
               <button
                 type="button"
                 class="seg-btn"
-                :class="{ 'is-on': activeTextStyle.direction === 'vertical' }"
-                :aria-pressed="activeTextStyle.direction === 'vertical'"
-                @click="updateTextStyle({ direction: 'vertical' })"
+                :class="{ 'is-on': activeTypo.direction === 'vertical' }"
+                :aria-pressed="activeTypo.direction === 'vertical'"
+                @click="writeTypo({ direction: 'vertical' })"
               >
                 竖排
               </button>
             </div>
+          </div>
+          <div class="row2">
+            <label class="field">
+              <span class="lb">颜色</span>
+              <input
+                class="sd-field color"
+                type="color"
+                :value="activeTypo.color"
+                @input="writeTypo({ color: ($event.target as HTMLInputElement).value })"
+              />
+            </label>
+            <label class="tg">
+              <input
+                type="checkbox"
+                :checked="activeTypo.bold"
+                @change="writeTypo({ bold: ($event.target as HTMLInputElement).checked })"
+              />
+              加粗
+            </label>
           </div>
           <p class="hint">弯曲度仅横排生效；竖排按字号逐字堆叠</p>
         </template>
@@ -533,48 +607,30 @@ function sizeRange(kind: CustomKind): { min: number; max: number } {
               @input="updateElement(activeElement.id, { text: ($event.target as HTMLInputElement).value })"
             />
           </label>
-          <div class="sub-row">
+          <!-- 图片与 SVG 的大小由「边长」独家负责:此前与「大小(%)」并存,
+               两者改的是同一个量,面板里出现两条互相打架的滑杆(实机反馈)。
+               图片这条是宽度,高度按原图比例自动换算 -->
+          <div v-if="activeElement.kind !== 'text'" class="sub-row">
             <SliderField
-              v-if="activeElement.kind !== 'text'"
               :model-value="activeElement.size"
               :min="sizeRange(activeElement.kind).min"
               :max="sizeRange(activeElement.kind).max"
-              label="边长"
+              :label="activeElement.kind === 'image' ? '宽度' : '边长'"
               suffix="px"
               @update:model-value="updateElement(activeElement.id, { size: $event })"
             />
           </div>
-          <!-- 旋转对所有自定义元素通用：图片/SVG/文字都绕自身锚点转 -->
-          <div class="sub-row">
-            <SliderField
-              :model-value="activeElement.rotation"
-              :min="TEXT_STYLE_LIMITS.ROTATION_MIN"
-              :max="TEXT_STYLE_LIMITS.ROTATION_MAX"
-              :step="5"
-              label="旋转"
-              suffix="°"
-              @update:model-value="updateElement(activeElement.id, { rotation: $event })"
-            />
-          </div>
-          <div class="row2">
-            <label v-if="activeElement.kind !== 'image'" class="field">
-              <span class="lb">颜色</span>
+          <!-- SVG 图标的颜色与文字颜色不是同一个东西:标记按 currentColor 入库,
+               改色要同时改写标记本身,所以单独一条,不与文字那组混用 -->
+          <div v-if="activeElement.kind === 'svg'" class="row2">
+            <label class="field">
+              <span class="lb">图标颜色</span>
               <input
                 class="sd-field color"
                 type="color"
                 :value="activeElement.color"
                 @input="onElementColor(activeElement.id, ($event.target as HTMLInputElement).value)"
               />
-            </label>
-            <!-- 图片与 SVG 的大小由「边长(px)」独家负责:此前与「大小(%)」并存,
-                 两者改的是同一个量,面板里出现两条互相打架的滑杆(实机反馈) -->
-            <label v-if="activeElement.kind === 'text'" class="tg">
-              <input
-                type="checkbox"
-                :checked="activeElement.bold"
-                @change="updateElement(activeElement.id, { bold: ($event.target as HTMLInputElement).checked })"
-              />
-              加粗
             </label>
           </div>
         </template>

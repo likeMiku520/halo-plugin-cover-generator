@@ -22,6 +22,10 @@ export interface Anchor {
   y: number
   /** 相对基准的字号/尺寸倍率 */
   scale: number
+  /** 不透明度 0–1（面板显示为 0–100%）；默认 1 */
+  opacity: number
+  /** 旋转角度（-180–180，顺时针为正）：绕元素锚点旋转，所有元素通用 */
+  rotation: number
 }
 
 /** 画布分辨率（像素）。改变它只改变构图比例，尺寸类数值按画布比例换算 */
@@ -48,19 +52,26 @@ export type BackgroundMode = 'gradient' | 'image'
 export type TextTarget = 'title' | 'subtitle' | 'watermark'
 
 /**
- * 文字排版样式。三个文字元素各存一份：
- * 字号/位置/大小是「这块放在哪」，本结构是「这行字怎么排」。
+ * 文字排版的可调项。
+ *
+ * 内置三元素（标题/副标题/水印）与自定义文字元素共用同一套字段，
+ * 渲染也走同一个引擎（lib/textLayout），因此不存在第二份排版实现。
+ * 「这块放在哪」由 Anchor 负责，「这行字怎么排」由本结构负责。
  */
-export interface TextStyle {
+export interface TextTypography {
   /** 字距（em）：正数更疏，负数更紧 */
   tracking: number
   /** 弯曲度（-100–100）：0 为直线，正负决定弧向；仅横排生效 */
   curve: number
-  /** 旋转角度（-180–180，顺时针为正） */
-  rotation: number
   /** 排列方向：横排或竖排 */
   direction: TextDirection
+  /** 文字颜色（#rrggbb） */
+  color: string
+  bold: boolean
 }
+
+/** 内置文字元素的排版样式 */
+export type TextStyle = TextTypography
 
 export type TextStyleMap = Record<TextTarget, TextStyle>
 
@@ -70,8 +81,12 @@ export type CustomKind = 'image' | 'text' | 'svg'
 /**
  * 自定义元素。text 经内置字体转为矢量路径（产物自包含，不依赖系统字体）；
  * image 存 dataURL、svg 存原始标记，两者同样保证导出 SVG 无外链。
+ *
+ * 继承 TextTypography：文字元素因此与标题/副标题/水印拥有同一套排版能力；
+ * 对 svg 图标而言 color 表示图标颜色（标记按 currentColor 入库），
+ * image 不使用这些字段。
  */
-export interface CustomElement {
+export interface CustomElement extends TextTypography {
   id: string
   kind: CustomKind
   /** image 为 dataURL；svg 为 SVG 源码；text 不使用 */
@@ -81,13 +96,11 @@ export interface CustomElement {
   /** image/svg 为基准边长（px）；text 为字号（px） */
   size: number
   anchor: Anchor
-  /** text 的文字颜色;svg 的图标颜色(标记按 currentColor 入库,渲染期由它解析) */
-  color: string
-  bold: boolean
-  /** 仅 text 使用：字距（em） */
-  tracking: number
-  /** 旋转角度（-180–180，顺时针为正）：绕元素锚点旋转，所有类型通用 */
-  rotation: number
+  /**
+   * 仅 image 使用：原图宽高比（w/h）。
+   * 位图不能按正方形硬裁——那样竖图与横图都会被切掉大半（实机反馈）。
+   */
+  aspect: number
 }
 
 /** 封面全部可编辑状态 */
@@ -114,16 +127,23 @@ export interface CoverState {
   backgroundImage: string | null
   /** 背景图之上的压暗遮罩强度（0–60 %）：照片明暗不可控，不压暗时白字常读不出来 */
   backgroundScrim: number
-  /** 标题 / 副标题 / 水印各自的排版样式（字距、弯曲、旋转、方向） */
+  /** 标题 / 副标题 / 水印各自的排版样式（字距、弯曲、方向、颜色、加粗） */
   textStyles: TextStyleMap
+  /** 预览拖动时是否显示并吸附智能参考线；默认关闭 */
+  smartGuides: boolean
   /** 用户上传的 Logo dataURL；null 表示用内置默认 */
   logoDataUrl: string | null
   logoHidden: boolean
   /** 域名水印；空串表示不显示 */
   watermark: string
-  /** 画布分辨率；默认 1200×630 */
+  /** 画布分辨率；默认 1200×675（宽屏 16:9） */
   canvas: CanvasSize
-  /** 标题/副标题/Logo/水印的位置与缩放 */
+  /**
+   * 当前选中的分辨率模式 id（预设 id 或 'custom'）。
+   * 不能只按尺寸反查：1200×675 既可能是「宽屏」预设、也可能是自定义填的同一组数字。
+   */
+  canvasPresetId: string
+  /** 标题/副标题/Logo/水印的位置、缩放、透明度与旋转 */
   layout: AnchorMap
   /** 自定义元素；按数组顺序即默认叠放顺序 */
   customElements: CustomElement[]

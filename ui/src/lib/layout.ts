@@ -1,4 +1,6 @@
 import { DEFAULT_PRESET } from './presets'
+import { DEFAULT_CANVAS_PRESET } from './canvasPresets'
+import { HEX6 } from './svgColor'
 import type {
   Anchor, AnchorMap, CanvasSize, CoverState, LayerKey, TextTarget, TextStyle, TextStyleMap, TitleMode,
 } from './types'
@@ -42,13 +44,45 @@ export const CANVAS = {
   /** 锚点取值边界：0 表示不预留裁切保护，元素可以贴到画布边缘 */
   MARGIN_X: 0,
   MARGIN_Y: 0,
+  /** 不透明度上限（面板用百分比显示，存的是 0–1） */
+  OPACITY_MAX: 100,
 } as const
 
 /** 副标题字距（em）与自定义元素默认字距基准 */
 export const SUB_TRACK = 0.3
 export const WM_TRACK = 0.08
 
-const anchor = (x: number, y: number, scale = 1): Anchor => ({ x, y, scale })
+/**
+ * 「大小」的百分比上下限。
+ *
+ * 面板滑杆与预览滚轮共用这一份：两处各写一套的话，滚轮能把元素放到滑杆够不到的位置，
+ * 面板就会显示一个被夹住的假值。
+ *
+ * 注意标题不在其中：标题的大小由 `titleFontSize` 单独承担（边界是
+ * CANVAS.TITLE_MIN–TITLE_BASE，即 64–210px），滚轮在标题上会把倍率折算成字号，
+ * 这里只用来决定「一次滚动走多少」。别以为标题也受 20–300 约束。
+ */
+export const ELEMENT_SCALE_LIMITS = {
+  subtitle: { min: 1, max: 100 },
+  watermark: { min: 1, max: 300 },
+  other: { min: 20, max: 300 },
+} as const
+
+/**
+ * 按元素取「大小」上下限。
+ *
+ * 面板滑杆、预览滚轮、以及将来的任何入口都走这一个函数：
+ * 「哪个元素用哪一档」只写在这里，不留第二份映射。
+ */
+export function scaleLimitsOf(id: string | null | undefined): { min: number; max: number } {
+  if (id === 'subtitle') return ELEMENT_SCALE_LIMITS.subtitle
+  if (id === 'watermark') return ELEMENT_SCALE_LIMITS.watermark
+  return ELEMENT_SCALE_LIMITS.other
+}
+
+const anchor = (x: number, y: number, scale = 1): Anchor => ({
+  x, y, scale, opacity: 1, rotation: 0,
+})
 
 /**
  * 默认锚点：整数百分比，重置后每个数值框里都是干净整数。
@@ -72,6 +106,11 @@ export function normalizeAnchor(a: Anchor): Anchor {
     x: clamp(a.x, CANVAS.MARGIN_X, 1 - CANVAS.MARGIN_X),
     y: clamp(a.y, CANVAS.MARGIN_Y, 1 - CANVAS.MARGIN_Y),
     scale: clamp(a.scale, 0.1, 5),
+    // 透明度与旋转是后加字段：旧档缺失时给默认值，不因此判整条元素非法
+    opacity: typeof a.opacity === 'number' && Number.isFinite(a.opacity)
+      ? clamp(a.opacity, 0, 1)
+      : 1,
+    rotation: normalizeRotation(a.rotation),
   }
 }
 
@@ -160,8 +199,10 @@ function defaultTextStyle(target: TextTarget): TextStyle {
   return {
     tracking: target === 'subtitle' ? SUB_TRACK : target === 'watermark' ? WM_TRACK : 0,
     curve: 0,
-    rotation: 0,
     direction: 'horizontal',
+    color: '#ffffff',
+    // 出厂不加粗：内置字体本身已是粗体，再加一层合成就比设计稿更重
+    bold: false,
   }
 }
 
@@ -189,8 +230,10 @@ export function normalizeTextStyle(value: unknown, fallback: TextStyle): TextSty
   return {
     tracking: clampTo(num(s.tracking, fallback.tracking), L.TRACKING_MIN, L.TRACKING_MAX),
     curve: Math.round(clampTo(num(s.curve, fallback.curve), L.CURVE_MIN, L.CURVE_MAX)),
-    rotation: Math.round(clampTo(num(s.rotation, fallback.rotation), L.ROTATION_MIN, L.ROTATION_MAX)),
     direction: s.direction === 'vertical' ? 'vertical' : 'horizontal',
+    // 颜色会被写进 SVG 的 fill 属性，只接受 #rrggbb
+    color: typeof s.color === 'string' && HEX6.test(s.color) ? s.color : fallback.color,
+    bold: typeof s.bold === 'boolean' ? s.bold : fallback.bold,
   }
 }
 
@@ -212,10 +255,13 @@ export function defaultCoverState(): CoverState {
     backgroundImage: null,
     backgroundScrim: CANVAS.BACKGROUND_SCRIM,
     textStyles: defaultTextStyles(),
+    // 智能参考线默认关闭：不请自来的吸附线会干扰已有手感
+    smartGuides: false,
     logoDataUrl: null,
     logoHidden: false,
     watermark: '',
-    canvas: { width: REF_W, height: REF_H },
+    canvas: { width: DEFAULT_CANVAS_PRESET.width, height: DEFAULT_CANVAS_PRESET.height },
+    canvasPresetId: DEFAULT_CANVAS_PRESET.id,
     layout: defaultAnchors(),
     customElements: [],
     layers: defaultLayers(),
@@ -223,8 +269,10 @@ export function defaultCoverState(): CoverState {
 }
 
 /** 画布尺寸合法域：兜住不可信存档，避免 0 或负数把渲染算成 NaN */
-const MIN_SIDE = 200
-const MAX_SIDE = 4096
+export const CANVAS_SIDE_MIN = 200
+export const CANVAS_SIDE_MAX = 4096
+const MIN_SIDE = CANVAS_SIDE_MIN
+const MAX_SIDE = CANVAS_SIDE_MAX
 
 export function isValidCanvasSize(v: unknown): v is CanvasSize {
   if (typeof v !== 'object' || v === null) return false

@@ -13,6 +13,8 @@ export interface CanvasPreset {
   ratio: string
   width: number
   height: number
+  /** 自定义模式：宽高由用户输入，不参与「按尺寸反查预设」 */
+  custom?: boolean
 }
 
 const p = (id: string, label: string, ratio: string, height: number): CanvasPreset => ({
@@ -30,6 +32,23 @@ export const CANVAS_PRESETS: CanvasPreset[] = [
   p('tall3x4', '竖版 3:4', '3:4', 1600),
   p('story9x16', '故事/短视频', '9:16', 2133),
 ]
+
+/**
+ * 自定义模式。
+ *
+ * 单独一项而不是把尺寸直接塞进前八个：1200×675 既可能来自「宽屏」预设、
+ * 也可能是用户手填的同一组数字，只有记住「选的是哪个模式」才能把选中态画对。
+ */
+export const CUSTOM_CANVAS_PRESET: CanvasPreset = {
+  id: 'custom', label: '自定义', ratio: '自定', width: 1200, height: 675, custom: true,
+}
+
+/** 出厂分辨率：宽屏 16:9（1200×675） */
+export const DEFAULT_CANVAS_PRESET: CanvasPreset =
+  CANVAS_PRESETS.find((c) => c.id === 'wide16x9') ?? CANVAS_PRESETS[0]
+
+/** 自定义模式的出厂宽高：与默认预设同尺寸，用户改起来有个参照 */
+export const CUSTOM_CANVAS_DEFAULT = { width: CUSTOM_CANVAS_PRESET.width, height: CUSTOM_CANVAS_PRESET.height }
 
 export function findPreset(size: CanvasSize): CanvasPreset | undefined {
   return CANVAS_PRESETS.find((c) => c.width === size.width && c.height === size.height)

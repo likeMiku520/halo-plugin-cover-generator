@@ -1,12 +1,13 @@
 import { ref, watch, onScopeDispose } from 'vue'
 import type { Ref } from 'vue'
-import type { Anchor, AnchorMap, CoverState, CustomElement, CustomKind, LayerKey, TextStyleMap, TextTarget, TitleMode } from '../lib/types'
+import type { Anchor, AnchorKey, AnchorMap, CoverState, CustomElement, CustomKind, LayerKey, TextStyleMap, TextTarget, TitleMode } from '../lib/types'
 import { DEFAULT_PRESET } from '../lib/presets'
+import { CUSTOM_CANVAS_PRESET, findPreset } from '../lib/canvasPresets'
 import { splitTitle } from '../lib/splitTitle'
 import {
-  CANVAS, REF_H, REF_W, defaultAnchors, defaultCoverState, defaultLayers, defaultTextStyles,
+  CANVAS, REF_H, REF_W, TEXT_STYLE_LIMITS, defaultAnchors, defaultCoverState, defaultLayers, defaultTextStyles,
   isValidCanvasSize, normalizeAnchor, normalizeBackgroundScrim, normalizeCanvasSize,
-  normalizeRotation, normalizeSeamGap, normalizeTextStyle,
+  normalizeSeamGap, normalizeTextStyle,
 } from '../lib/layout'
 
 /** 工作台状态存档键;CoverWorkbench 需同名键判断「是否存在存档」(archive-wins 播种门槛) */
@@ -40,6 +41,28 @@ function migrate(raw: Record<string, unknown>, base: CoverState): CoverState {
 }
 
 const HEX = /^#[0-9a-f]{6}$/i
+
+/** 从不可信对象里取一个可选数字字段；非数字/缺失都返回 undefined 交给调用方回落 */
+function optionalNumber(v: unknown, key: string): number | undefined {
+  if (typeof v !== 'object' || v === null) return undefined
+  const raw = (v as Record<string, unknown>)[key]
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined
+}
+
+/** 旧档把旋转存在 textStyles[key].rotation 里；2.0 起旋转归 anchor 所有 */
+function legacyStyleRotations(v: unknown): Partial<Record<AnchorKey, number>> {
+  if (typeof v !== 'object' || v === null) return {}
+  const src = v as Record<string, unknown>
+  const out: Partial<Record<AnchorKey, number>> = {}
+  for (const key of TEXT_TARGETS) out[key] = optionalNumber(src[key], 'rotation')
+  return out
+}
+
+/** 弯曲度收敛进 ±100；缺失时回落 0（直线） */
+function normalizeCurve(v: number | undefined): number {
+  if (v === undefined) return 0
+  return Math.round(Math.min(TEXT_STYLE_LIMITS.CURVE_MAX, Math.max(TEXT_STYLE_LIMITS.CURVE_MIN, v)))
+}
 
 function isValidAnchor(v: unknown): v is Anchor {
   if (typeof v !== 'object' || v === null) return false
@@ -127,18 +150,32 @@ function repairNewFields(
   }
   const anchors = defaultAnchors()
   const rawLayout = raw.layout as Record<string, unknown> | undefined
+  // 1.x 把旋转存在 textStyles[key].rotation 里，2.0 起旋转归 anchor 所有，先把旧值取出来
+  const legacyRotations = legacyStyleRotations(raw.textStyles)
   const layout = {} as AnchorMap
   for (const key of Object.keys(anchors) as (keyof AnchorMap)[]) {
     const candidate = rawLayout?.[key]
     if (isValidAnchor(candidate)) {
-      layout[key] = normalizeAnchor(candidate)
+      layout[key] = normalizeAnchor({
+        ...candidate,
+        rotation: optionalNumber(candidate, 'rotation') ?? legacyRotations[key] ?? 0,
+      } as Anchor)
     } else {
       // 旧档无 layout 字段:补齐默认锚点(等价于改造前的硬编码位置),观感不变
-      layout[key] = anchors[key]
+      // 旧档的旋转同样要过归一化：-900 这种值必须收敛进 ±180
+      layout[key] = normalizeAnchor({ ...anchors[key], rotation: legacyRotations[key] ?? 0 } as Anchor)
       repaired = true
     }
   }
   merged.layout = layout
+  if (typeof raw.smartGuides !== 'boolean') {
+    merged.smartGuides = false
+    repaired = true
+  }
+  // 记住选中的分辨率模式：只按尺寸反查无法区分「宽屏预设」与「自定义填了同一组数字」
+  merged.canvasPresetId = typeof raw.canvasPresetId === 'string' && raw.canvasPresetId !== ''
+    ? raw.canvasPresetId
+    : (findPreset(merged.canvas)?.id ?? CUSTOM_CANVAS_PRESET.id)
   const rawElements = raw.customElements
   let customIds: string[] = []
   if (!Array.isArray(rawElements)) {
@@ -149,9 +186,15 @@ function repairNewFields(
     if (kept.length !== rawElements.length) repaired = true
     merged.customElements = kept.map((e) => ({
       ...e,
-      anchor: normalizeAnchor(e.anchor),
-      // rotation 是后加字段：旧档必然缺失，缺失时补 0 而不是把整条元素判为非法
-      rotation: normalizeRotation(e.rotation),
+      anchor: normalizeAnchor({
+        ...e.anchor,
+        // 旧档的旋转在元素上，现在归 anchor
+        rotation: optionalNumber(e, 'rotation') ?? optionalNumber(e.anchor, 'rotation') ?? 0,
+      } as Anchor),
+      // 下表三项都是 2.0 新增：旧档必然缺失，补默认值而不是把整条元素判为非法
+      curve: normalizeCurve(optionalNumber(e, 'curve')),
+      direction: e.direction === 'vertical' ? 'vertical' : 'horizontal',
+      aspect: optionalNumber(e, 'aspect') ?? 1,
     }))
     customIds = kept.map((e) => e.id)
   }

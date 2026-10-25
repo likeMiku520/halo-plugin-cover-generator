@@ -1,5 +1,8 @@
-import { computed, ref } from 'vue'
-import type { AnchorKey, AnchorMap } from '../lib/types'
+import { computed, getCurrentScope, onScopeDispose, ref } from 'vue'
+import type { Anchor, AnchorKey, AnchorMap, CanvasSize, LayerKey } from '../lib/types'
+import { CANVAS, scaleLimitsOf } from '../lib/layout'
+import type { ElementBox } from '../lib/elementGeometry'
+import { snapAnchor, type AlignRect, type Guide } from '../lib/smartGuides'
 
 /** 可交互目标：四个内置元素 + 自定义元素 */
 export type SelectionId = AnchorKey | `custom:${string}`
@@ -17,15 +20,52 @@ export function anchorLabel(key: AnchorKey): string {
   return SELECTION_LABEL[key]
 }
 
+/**
+ * 画布交互写回状态的最小字段集。
+ *
+ * 只列交互真正会改的字段：透明度与旋转由面板负责，
+ * 交互回写时以现有锚点为底合并，绝不能因为「没提这两个字段」而把它们抹回默认值。
+ */
+export interface AnchorPatch {
+  x?: number
+  y?: number
+  scale?: number
+}
+
 /** 微调步长：方向键 1 步，Shift+方向键 10 步（单位为画布宽/高的千分之一） */
 const NUDGE_STEP = 1
 const NUDGE_STEP_LARGE = 10
 
 /**
+ * 锚点来源：内置元素在 layout，自定义元素在 customElements。
+ *
+ * 用结构类型而不是整个 CoverState：交互层只需要「按 id 取到锚点」这一件事，
+ * 传完整状态或只传这两张表都成立，测试也就不必造一整份状态。
+ */
+export interface AnchorSource {
+  layout: AnchorMap
+  customElements: { id: string; anchor: Anchor }[]
+}
+
+/**
+ * 按目标 id 取锚点（内置元素在 layout，自定义元素在 customElements）。
+ *
+ * 键盘微调、拖动、滚轮与写回共用这一份取值：各写一套的话，
+ * 就会出现「拖得动、方向键却纹丝不动」这类按元素种类分叉的行为。
+ */
+export function anchorOfTargets(source: AnchorSource, id: SelectionId): Anchor | null {
+  if (id.startsWith('custom:')) {
+    const target = id.slice('custom:'.length)
+    return source.customElements.find((el) => el.id === target)?.anchor ?? null
+  }
+  return source.layout[id as AnchorKey] ?? null
+}
+
+/**
  * 画布选中态与键盘微调。
  *
- * 选中只由「元素」面板驱动（画布是纯预览，不接收点击），
- * 因此这里不持有指针会话，只维护当前选中项与位置微调。
+ * 选中由「元素」面板与画布点击共同驱动，两边都只是调用方：
+ * 选中态本身只有工作台那一份，避免画布与面板各持一份而互相看不见对方的选择。
  */
 export function useCanvasInteraction() {
   const selected = ref<SelectionId | null>(null)
@@ -39,15 +79,17 @@ export function useCanvasInteraction() {
   /**
    * 键盘微调：方向键移动选中元素，Shift 加大步长。
    * 返回更新后的锚点与目标 id；非方向键或未选中时返回 null。
+   * 只改位置——透明度/旋转原样带过，越界由写回路径的 normalizeAnchor 收敛。
    */
   function nudge(
     ev: KeyboardEvent,
-    layout: AnchorMap,
-  ): { id: SelectionId; anchor: { x: number; y: number; scale: number } } | null {
+    source: AnchorSource,
+  ): { id: SelectionId; anchor: Anchor } | null {
     const id = selected.value
     if (!id) return null
     const step = (ev.shiftKey ? NUDGE_STEP_LARGE : NUDGE_STEP) / 1000
-    const current = anchorOf(layout, id)
+    // 自定义元素同样在 source 里：内置与自定义的微调走同一条取值路径
+    const current = anchorOfTargets(source, id)
     if (!current) return null
     let dx = 0
     let dy = 0
@@ -65,8 +107,209 @@ export function useCanvasInteraction() {
   return { selected, hasSelection, select, nudge }
 }
 
-/** 从布局表中取某目标锚点；自定义元素不在其中，由调用方单独处理 */
-export function anchorOf(layout: AnchorMap, id: SelectionId) {
-  const key = id as AnchorKey
-  return ANCHOR_KEYS.includes(key) ? layout[key] : null
+/** 画布坐标点：0–1 比例，与渲染共用同一套坐标（除以画布尺寸即可） */
+export interface CanvasPoint {
+  x: number
+  y: number
+}
+
+// ---------------------------------------------------------------------------
+// 画布指针交互（拖动 / 滚轮 / 参考线）
+//
+// 与上面的选中态分开成两个组合式函数：选中态归工作台持有（面板与画布共读一份），
+// 而拖动会话只属于预览层那一次指针操作。若合成一个实例，
+// 预览层就会多出一个「谁也没在看的 selected」，日后误用必然出现两份选择。
+// ---------------------------------------------------------------------------
+
+/**
+ * 命中测试：返回指针落在哪个元素上，空白处返回 null。
+ *
+ * 用包围盒（而非事件目标）判定：多个元素可以上下重叠，且命中框里还有
+ * 选中环、标签等子节点，按坐标判定才能保证「点到谁就是谁」。
+ * 旋转元素按未旋转的包围盒命中——视觉上略宽，但旋转后的小字仍能一次点中。
+ */
+export function hitTest(input: {
+  boxes: ElementBox[]
+  point: CanvasPoint
+  canvas: CanvasSize
+  /** 图层顺序（数组靠后者在上层）；重叠时取上层，与肉眼所见一致 */
+  layers?: LayerKey[]
+}): SelectionId | null {
+  const { boxes, point, canvas, layers } = input
+  const px = point.x * canvas.width
+  const py = point.y * canvas.height
+  let bestId: SelectionId | null = null
+  let bestOrder = -Infinity
+  for (let i = 0; i < boxes.length; i++) {
+    const box = boxes[i]
+    if (!(box.width > 0) || !(box.height > 0)) continue
+    if (px < box.x || px > box.x + box.width || py < box.y || py > box.y + box.height) continue
+    // 不在图层表中的元素排在已知图层之后（自定义元素本就在包围盒数组末尾，天然更靠上）
+    const inLayers = layers ? layers.indexOf(box.id as LayerKey) : -1
+    const order = inLayers >= 0 ? inLayers : (layers?.length ?? 0) + i
+    if (order >= bestOrder) {
+      bestOrder = order
+      bestId = box.id as SelectionId
+    }
+  }
+  return bestId
+}
+
+/** 一次拖动会话：按下时的锚点与包围盒是一切位移的基准 */
+interface DragSession {
+  id: SelectionId
+  origin: Anchor
+  box: ElementBox
+  /** 按下时的指针位置（画布比例） */
+  start: CanvasPoint
+}
+
+/** 滚轮一格（约 100px）约 2%：再大就跳格，再小则长滚也不动 */
+const WHEEL_PERCENT_PER_PIXEL = 0.02
+/** 行模式(deltaMode=1)与页模式(2)折算成像素：各家浏览器给出的单位差异极大 */
+const WHEEL_LINE_PX = 16
+const WHEEL_PAGE_PX = 400
+/** 单次事件的步进上限：个别驱动会给出上千像素的 deltaY，不限幅会一滚跳掉半个大小 */
+const WHEEL_MAX_STEP_PERCENT = 10
+/**
+ * 滚轮会话的静默窗口：最后一次滚动后这么久没有新事件才算「滚完了」。
+ * 窗口内预览都不走防抖，滚完自动恢复（否则图元会落后于滚轮）。
+ */
+const WHEEL_IDLE_MS = 250
+
+/** 锚点安全域：与 normalizeAnchor 同源，拖动时就把坐标夹住 */
+const clampX = (n: number) => Math.min(1 - CANVAS.MARGIN_X, Math.max(CANVAS.MARGIN_X, n))
+const clampY = (n: number) => Math.min(1 - CANVAS.MARGIN_Y, Math.max(CANVAS.MARGIN_Y, n))
+
+/**
+ * 倍率边界的夹取。
+ *
+ * 界内的值直接夹到边界；当前值本就在界外时（旧档可能存着比面板更宽的倍率）
+ * 只允许朝界内的方向继续走：既不会被一次滚动弹到另一头，也不会卡死在界外。
+ */
+function clampPercent(target: number, current: number, min: number, max: number): number {
+  if (target > max) return current > max ? Math.min(target, current) : max
+  if (target < min) return current < min ? Math.max(target, current) : min
+  return target
+}
+
+/**
+ * 预览画布上的拖动、滚轮缩放与智能参考线。
+ *
+ * 只负责算出「下一个锚点值」并把参考线呈现出来，写回状态由调用方经既有更新路径完成，
+ * 因此这里不碰 CoverState，也就不会出现绕开状态校验的第二条写入通道。
+ */
+export function useCanvasDrag() {
+  const guides = ref<Guide[]>([])
+  const dragging = ref(false)
+  const wheeling = ref(false)
+  /**
+   * 是否正处于一次画布交互（拖动或滚轮窗口）中。
+   * 预览层据此旁路渲染防抖：防抖是为打字合帧，交互期间它只会让图元落后于指针。
+   */
+  const interacting = computed(() => dragging.value || wheeling.value)
+  let session: DragSession | null = null
+  /** 不足一个百分点的零头：攒到下一次滚轮，慢滚时既不「纹丝不动」也不跳格 */
+  let wheelRemainder = 0
+  let wheelIdleTimer: ReturnType<typeof setTimeout> | undefined
+
+  // 组件卸载时清掉待触发的窗口计时器；组合式函数也可能在组件外被调用（测试），故先判作用域
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      if (wheelIdleTimer) clearTimeout(wheelIdleTimer)
+    })
+  }
+
+  /** 进入拖动：以按下瞬间的锚点与包围盒为基准 */
+  function begin(o: { id: SelectionId; anchor: Anchor; box: ElementBox; point: CanvasPoint }) {
+    session = { id: o.id, origin: { ...o.anchor }, box: { ...o.box }, start: { ...o.point } }
+    dragging.value = true
+    guides.value = []
+  }
+
+  /**
+   * 指针移动：返回该写回的锚点坐标；未在拖动中返回 null。
+   *
+   * 位置一律由「按下点 + 累计指针位移」重算，绝不累加吸附量，
+   * 这样指针离开吸附范围的那一刻元素就自然脱离（不粘住）。
+   */
+  function move(
+    point: CanvasPoint,
+    ctx: { canvas: CanvasSize; boxes: ElementBox[]; snap: boolean },
+  ): { id: SelectionId; x: number; y: number } | null {
+    const s = session
+    if (!s) return null
+    const { canvas } = ctx
+    const rawX = clampX(s.origin.x + (point.x - s.start.x))
+    const rawY = clampY(s.origin.y + (point.y - s.start.y))
+    let x = rawX
+    let y = rawY
+    let nextGuides: Guide[] = []
+    if (ctx.snap) {
+      // 被拖元素在「未吸附位置」上的包围盒：按下时的框整体平移，尺寸不变
+      const box: AlignRect = {
+        x: s.box.x + (rawX - s.origin.x) * canvas.width,
+        y: s.box.y + (rawY - s.origin.y) * canvas.height,
+        width: s.box.width,
+        height: s.box.height,
+        centerY: s.box.centerY + (rawY - s.origin.y) * canvas.height,
+      }
+      const snapped = snapAnchor({
+        box,
+        canvas,
+        others: ctx.boxes.filter((b) => b.id !== s.id),
+      })
+      x = clampX(rawX + snapped.dx)
+      y = clampY(rawY + snapped.dy)
+      // 被边界截断的轴不画线：线画在那里而元素并没有贴上去，比不画更误导
+      nextGuides = snapped.guides.filter((g) =>
+        (g.axis === 'x' ? x === rawX + snapped.dx : y === rawY + snapped.dy))
+    }
+    guides.value = nextGuides
+    return { id: s.id, x, y }
+  }
+
+  /** 结束拖动：参考线只属于拖动过程，松手即消失 */
+  function end() {
+    session = null
+    dragging.value = false
+    guides.value = []
+  }
+
+  /**
+   * 滚轮缩放：返回新的倍率（必为整数百分比）；未产生变化时返回 null。
+   * 上滚放大、下滚缩小；边界按当前选中元素取（与面板滑杆同一份表）。
+   */
+  function scaleByWheel(ev: WheelEvent, id: SelectionId, currentScale: number): number | null {
+    const mode = ev.deltaMode === 1 ? WHEEL_LINE_PX : ev.deltaMode === 2 ? WHEEL_PAGE_PX : 1
+    const px = ev.deltaY * mode
+    if (!Number.isFinite(px) || px === 0) return null
+    // deltaY<0 是上滚 ⇒ 变大，与「向上＝放大」的直觉一致
+    wheelRemainder += -px * WHEEL_PERCENT_PER_PIXEL
+    const raw = Math.trunc(wheelRemainder)
+    if (raw === 0) return null
+    wheelRemainder -= raw // 已消费的整步不再重复计入
+    const steps = Math.max(-WHEEL_MAX_STEP_PERCENT, Math.min(WHEEL_MAX_STEP_PERCENT, raw))
+    const current = Math.round(currentScale * 100)
+    const target = current + steps
+    const limits = scaleLimitsOf(id)
+    const percent = clampPercent(target, current, limits.min, limits.max)
+    // 顶到边界后清零零头：否则反向滚动要先「还债」，手感像卡住
+    if (percent !== target) wheelRemainder = 0
+    // 已经在边界上：本次滚动不产生变化，不写回状态（页面滚动仍由调用方拦下）
+    if (percent === current) return null
+    return percent / 100
+  }
+
+  /** 标记一次滚轮活动：窗口内预览不走防抖，滚完（静默 WHEEL_IDLE_MS）自动收起 */
+  function markWheelActivity() {
+    wheeling.value = true
+    if (wheelIdleTimer) clearTimeout(wheelIdleTimer)
+    wheelIdleTimer = setTimeout(() => {
+      wheeling.value = false
+      wheelIdleTimer = undefined
+    }, WHEEL_IDLE_MS)
+  }
+
+  return { guides, dragging, wheeling, interacting, begin, move, end, scaleByWheel, markWheelActivity }
 }

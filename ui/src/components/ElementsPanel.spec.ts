@@ -26,8 +26,10 @@ describe('ElementsPanel 滑杆命名', () => {
 describe('ElementsPanel 文字排版控件', () => {
   it('选中标题时出现字间距 / 弯曲度 / 旋转 / 方向', () => {
     const wrapper = mountPanel('title')
-    expect(wrapper.text()).toContain('文字排版')
-    for (const label of ['字间距', '弯曲度', '旋转', '横排', '竖排']) {
+    // 2.0 起分为「外观」（透明度/旋转，所有元素通用）与「文字」（排版）两组
+    expect(wrapper.text()).toContain('外观')
+    expect(wrapper.text()).toContain('文字')
+    for (const label of ['透明度', '旋转', '字间距', '弯曲度', '横排', '竖排', '颜色', '加粗']) {
       expect(wrapper.text()).toContain(label)
     }
     wrapper.unmount()
@@ -52,23 +54,26 @@ describe('ElementsPanel 文字排版控件', () => {
     const wrapper = mountPanel('custom:img1', {
       customElements: [{
         id: 'img1', kind: 'image', content: 'data:image/png;base64,AA', text: '', size: 120,
-        anchor: { x: 0.5, y: 0.5, scale: 1 }, color: '#ffffff',
-        bold: false, tracking: 0, rotation: 0,
+        anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 }, color: '#ffffff',
+        bold: false, tracking: 0, curve: 0, direction: 'horizontal' as const, aspect: 1,
       }],
     })
     expect(wrapper.text()).not.toContain('弯曲度')
     wrapper.unmount()
   })
 
-  it('自定义文字元素不套用内置文字那套样式', () => {
+  it('自定义文字元素拥有与内置文字完全相同的排版控件', () => {
     const wrapper = mountPanel('custom:x1', {
       customElements: [{
         id: 'x1', kind: 'text', content: '', text: 'hi', size: 48,
-        anchor: { x: 0.5, y: 0.5, scale: 1 }, color: '#ffffff',
-        bold: true, tracking: 0, rotation: 0,
+        anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 }, color: '#ffffff',
+        bold: true, tracking: 0, curve: 0, direction: 'horizontal' as const, aspect: 1,
       }],
     })
-    expect(wrapper.text()).not.toContain('弯曲度')
+    // 需求 6：自定义文字要拥有标题那套全部能力，面板里就是同一组控件
+    for (const label of ['透明度', '旋转', '字间距', '弯曲度', '横排', '竖排', '颜色', '加粗']) {
+      expect(wrapper.text()).toContain(label)
+    }
     wrapper.unmount()
   })
 
@@ -101,13 +106,13 @@ describe('ElementsPanel 大小滑杆去重与圆形裁剪移除', () => {
   const SVG_ELEMENT = {
     id: 's1', kind: 'svg' as const,
     content: '<svg viewBox="0 0 24 24"><rect width="24" height="24"/></svg>',
-    text: '', size: 120, anchor: { x: 0.5, y: 0.5, scale: 1 },
-    color: '#ffffff', bold: false, tracking: 0, rotation: 0,
+    text: '', size: 120, anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 },
+    color: '#ffffff', bold: false, tracking: 0, curve: 0, direction: 'horizontal' as const, aspect: 1,
   }
   const IMAGE_ELEMENT = {
     id: 'i1', kind: 'image' as const, content: 'data:image/png;base64,AA',
-    text: '', size: 120, anchor: { x: 0.5, y: 0.5, scale: 1 },
-    color: '#ffffff', bold: false, tracking: 0, rotation: 0,
+    text: '', size: 120, anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 },
+    color: '#ffffff', bold: false, tracking: 0, curve: 0, direction: 'horizontal' as const, aspect: 1,
   }
 
   it('SVG 元素只有「边长(px)」一条大小滑杆,不再与「大小(%)」并存', () => {
@@ -118,10 +123,10 @@ describe('ElementsPanel 大小滑杆去重与圆形裁剪移除', () => {
     wrapper.unmount()
   })
 
-  it('图片元素同上', () => {
+  it('图片元素同上（图片这条是宽度，高度按原图比例算）', () => {
     const wrapper = mountPanel('custom:i1', { customElements: [IMAGE_ELEMENT] })
     const labels = wrapper.findAll('.sf-label').map((n) => n.text())
-    expect(labels).toContain('边长')
+    expect(labels).toContain('宽度')
     expect(labels.filter((l) => l === '大小')).toHaveLength(0)
     wrapper.unmount()
   })
@@ -144,7 +149,7 @@ describe('ElementsPanel 大小滑杆去重与圆形裁剪移除', () => {
     const wrapper = mountPanel('custom:t1', {
       customElements: [{
         id: 't1', kind: 'text', content: '', text: 'hi', size: 48,
-        anchor: { x: 0.5, y: 0.5, scale: 1 }, color: '#ffffff', bold: true, tracking: 0, rotation: 0,
+        anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 }, color: '#ffffff', bold: true, tracking: 0, curve: 0, direction: 'horizontal' as const, aspect: 1,
       }],
     })
     expect(wrapper.text()).toContain('加粗')
@@ -204,11 +209,11 @@ describe('ElementsPanel 添加元素区（只留 Halo 官方三合一入口）',
 describe('ElementsPanel 重置：位置 vs 全部数值', () => {
   const TEXT_ELEMENT = {
     id: 't1', kind: 'text' as const, content: '', text: '保留的文案', size: 120,
-    anchor: { x: 0.1, y: 0.1, scale: 0.5 }, color: '#39c5bb', bold: true, tracking: 0.4, rotation: 90,
+    anchor: { x: 0.1, y: 0.1, scale: 0.5, opacity: 1, rotation: 90 }, color: '#39c5bb', bold: true, tracking: 0.4, curve: 0, direction: 'horizontal' as const, aspect: 1,
   }
   const IMAGE_ELEMENT = {
     id: 'i1', kind: 'image' as const, content: 'data:image/png;base64,AA', text: '', size: 300,
-    anchor: { x: 0.9, y: 0.9, scale: 2 }, color: '#ffffff', bold: false, tracking: 0, rotation: -45,
+    anchor: { x: 0.9, y: 0.9, scale: 2, opacity: 1, rotation: 0 }, color: '#ffffff', bold: false, tracking: 0, curve: 0, direction: 'horizontal' as const, aspect: 1,
   }
   /** 面板头部那两个并列按钮 */
   function headButton(wrapper: ReturnType<typeof mountPanel>, label: string) {
@@ -225,10 +230,10 @@ describe('ElementsPanel 重置：位置 vs 全部数值', () => {
   it('「重置全部数值」归位分辨率/锚点/字号/中缝/排版样式/压暗/元素尺寸与旋转', async () => {
     const wrapper = mountPanel('custom:t1', {
       canvas: { width: 2400, height: 1260 },
-      layout: { ...defaultAnchors(), logo: { x: 0.2, y: 0.2, scale: 3 } },
+      layout: { ...defaultAnchors(), logo: { x: 0.2, y: 0.2, scale: 3, opacity: 1, rotation: 0 } },
       titleFontSize: 210,
       seamGap: 200,
-      textStyles: { ...defaultTextStyles(), title: { tracking: 1, curve: 80, rotation: 30, direction: 'vertical' } },
+      textStyles: { ...defaultTextStyles(), title: { tracking: 1, curve: 80, direction: 'vertical', color: '#ff0000', bold: true } },
       backgroundScrim: 60,
       customElements: [TEXT_ELEMENT, IMAGE_ELEMENT],
     })
@@ -244,8 +249,8 @@ describe('ElementsPanel 重置：位置 vs 全部数值', () => {
     // 自定义元素逐个归位：锚点居中、尺寸按类型(文字 48 / 图形 160)、旋转归零，
     // 内容与颜色等非数值字段原样保留
     expect(patch.customElements).toEqual([
-      { ...TEXT_ELEMENT, anchor: { x: 0.5, y: 0.5, scale: 1 }, size: 48, rotation: 0 },
-      { ...IMAGE_ELEMENT, anchor: { x: 0.5, y: 0.5, scale: 1 }, size: 160, rotation: 0 },
+      { ...TEXT_ELEMENT, anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 }, size: 48 },
+      { ...IMAGE_ELEMENT, anchor: { x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 0 }, size: 160 },
     ])
     wrapper.unmount()
   })
@@ -278,7 +283,7 @@ describe('ElementsPanel 重置：位置 vs 全部数值', () => {
       canvas: { width: 2400, height: 1260 },
       titleFontSize: 210,
       seamGap: 200,
-      textStyles: { ...defaultTextStyles(), title: { tracking: 1, curve: 80, rotation: 30, direction: 'vertical' } },
+      textStyles: { ...defaultTextStyles(), title: { tracking: 1, curve: 80, direction: 'vertical', color: '#ff0000', bold: true } },
       backgroundScrim: 60,
       customElements: [TEXT_ELEMENT],
     })
@@ -286,7 +291,7 @@ describe('ElementsPanel 重置：位置 vs 全部数值', () => {
 
     const patch = wrapper.emitted('update:modelValue')!.at(-1)![0] as CoverState
     expect(patch.layout).toEqual(defaultAnchors())
-    expect(patch.customElements[0].anchor).toEqual({ x: 0.5, y: 0.5, scale: 1 })
+    expect(patch.customElements[0].anchor).toEqual({ x: 0.5, y: 0.5, scale: 1, opacity: 1, rotation: 90 })
     // 与「重置全部数值」的差异：这些数值项原样不动
     expect(patch.titleFontSize).toBe(210)
     expect(patch.canvas).toEqual({ width: 2400, height: 1260 })
@@ -295,7 +300,7 @@ describe('ElementsPanel 重置：位置 vs 全部数值', () => {
     expect(patch.textStyles.title.tracking).toBe(1)
     // 元素只归位，不重置大小与旋转（那是另一个按钮的职责）
     expect(patch.customElements[0].size).toBe(120)
-    expect(patch.customElements[0].rotation).toBe(90)
+    expect(patch.customElements[0].anchor.rotation).toBe(90)
     wrapper.unmount()
   })
 })

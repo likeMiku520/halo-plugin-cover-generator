@@ -4,8 +4,8 @@ import { FormKit } from '@formkit/vue'
 import type { CoverState } from '../lib/types'
 import type { SelectionId } from '../composables/useCanvasInteraction'
 import type { FontLike } from '../lib/svgBuilder'
-import { CANVAS_PRESETS, describeCanvas, presetOfId } from '../lib/canvasPresets'
-import { CANVAS } from '../lib/layout'
+import { CANVAS_PRESETS, CUSTOM_CANVAS_PRESET, describeCanvas, presetOfId } from '../lib/canvasPresets'
+import { CANVAS, CANVAS_SIDE_MAX, CANVAS_SIDE_MIN } from '../lib/layout'
 import { validateLogoUrl, fetchLogoAsDataUrl } from '../lib/logoFetcher'
 import GradientPicker from './GradientPicker.vue'
 import ElementsPanel from './ElementsPanel.vue'
@@ -47,17 +47,36 @@ function set(patch: Partial<CoverState>) {
 const selectedId = computed(() => props.selected ?? null)
 /** 当前分辨率描述 */
 const canvasText = computed(() => describeCanvas(props.modelValue.canvas))
-/** 当前命中的预设 id（自定义尺寸时为 null） */
-const activePresetId = computed(() => presetOfId(
-  CANVAS_PRESETS.find(
-    (c) => c.width === props.modelValue.canvas.width && c.height === props.modelValue.canvas.height,
-  )?.id ?? '',
-)?.id ?? null)
+/**
+ * 当前选中的分辨率模式。
+ *
+ * 直接读 state.canvasPresetId，而不是按尺寸反查：1200×675 既可能是「宽屏」预设、
+ * 也可能是用户自定义填的同一组数字，只看尺寸没法把选中态画对。
+ */
+const activePresetId = computed(() => props.modelValue.canvasPresetId)
+/** 预设 + 自定义：自定义排在最后，语义上不是「又一个比例」 */
+const presetOptions = [...CANVAS_PRESETS, CUSTOM_CANVAS_PRESET]
+const isCustomCanvas = computed(() => activePresetId.value === CUSTOM_CANVAS_PRESET.id)
 
 function applyPreset(id: string) {
+  if (id === CUSTOM_CANVAS_PRESET.id) {
+    // 切到自定义时保留当前尺寸：用户多半是想在现有比例上微调，而不是跳回出厂值
+    set({ canvasPresetId: CUSTOM_CANVAS_PRESET.id })
+    return
+  }
   const preset = presetOfId(id)
   if (!preset) return
-  set({ canvas: { width: preset.width, height: preset.height } })
+  set({ canvas: { width: preset.width, height: preset.height }, canvasPresetId: preset.id })
+}
+
+/** 自定义宽高：越界只夹住这一边，不把另一边的值一起冲掉 */
+function setCustomCanvas(which: 'width' | 'height', raw: number) {
+  if (!Number.isFinite(raw)) return
+  const v = Math.min(CANVAS_SIDE_MAX, Math.max(CANVAS_SIDE_MIN, Math.round(raw)))
+  set({
+    canvas: { ...props.modelValue.canvas, [which]: v },
+    canvasPresetId: CUSTOM_CANVAS_PRESET.id,
+  })
 }
 
 function onFile(e: Event) {
@@ -197,7 +216,7 @@ const mediaSub = computed(() => {
       <div class="lb"><b>分辨率</b><span class="meta">换比例不会丢内容</span></div>
       <div class="presets" role="group" aria-label="画布分辨率">
         <button
-          v-for="preset in CANVAS_PRESETS"
+          v-for="preset in presetOptions"
           :key="preset.id"
           type="button"
           class="preset"
@@ -210,9 +229,46 @@ const mediaSub = computed(() => {
           <span class="preset-ratio">{{ preset.ratio }}</span>
         </button>
       </div>
+      <!-- 自定义宽高：只在选中「自定义」时出现，避免八个预设旁边常驻两个输入框 -->
+      <div v-if="isCustomCanvas" class="row2 custom-size">
+        <label class="field">
+          <span class="lb">宽</span>
+          <input
+            class="sd-field"
+            type="number"
+            :min="CANVAS_SIDE_MIN"
+            :max="CANVAS_SIDE_MAX"
+            :value="modelValue.canvas.width"
+            aria-label="自定义画布宽度"
+            @change="setCustomCanvas('width', Number(($event.target as HTMLInputElement).value))"
+          />
+        </label>
+        <label class="field">
+          <span class="lb">高</span>
+          <input
+            class="sd-field"
+            type="number"
+            :min="CANVAS_SIDE_MIN"
+            :max="CANVAS_SIDE_MAX"
+            :value="modelValue.canvas.height"
+            aria-label="自定义画布高度"
+            @change="setCustomCanvas('height', Number(($event.target as HTMLInputElement).value))"
+          />
+        </label>
+      </div>
+
+      <label class="tg">
+        <input
+          type="checkbox"
+          :checked="modelValue.smartGuides"
+          @change="set({ smartGuides: ($event.target as HTMLInputElement).checked })"
+        />
+        智能参考线
+      </label>
+      <p class="hint">拖动元素时显示画布中线与其他元素的对齐线，并自动吸附</p>
     </section>
 
-    <div class="eyebrow">内容</div>
+    <div class="eyebrow">文字内容</div>
     <section class="card">
       <div class="lb"><b>标题</b><span class="meta">{{ modelValue.titleMode === 'split' ? '左 │ 右' : '整块自动换行' }}</span></div>
       <div class="seg" role="group" aria-label="标题排版模式">
@@ -303,7 +359,7 @@ const mediaSub = computed(() => {
       </div>
     </section>
 
-    <div class="eyebrow">外观</div>
+    <div class="eyebrow">背景</div>
     <section class="card">
       <div class="lb">
         <b>背景</b>
@@ -355,6 +411,9 @@ const mediaSub = computed(() => {
       @update:model-value="emit('update:modelValue', $event)"
     ></GradientPicker>
 
+    <!-- Logo 与背景同属「铺底」，但两者互不相关：挤在同一个「外观」分区里
+         会让人以为 Logo 属于背景设置，因此各给一个分区标题 -->
+    <div class="eyebrow">Logo</div>
     <section class="card">
       <div class="logo-head">
         <b>Logo</b>
@@ -818,6 +877,25 @@ const mediaSub = computed(() => {
 }
 
 /* ---- 提示文本 ---- */
+/* 复选行：与输入框同一套排版语汇（小标签 + 控件） */
+.tg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: var(--sd-fs-sm);
+  color: var(--sd-text);
+  cursor: pointer;
+}
+
+.tg input {
+  accent-color: var(--sd-accent);
+}
+
+.custom-size {
+  margin-top: 10px;
+}
+
 .hint {
   color: var(--sd-text-2);
   font-size: var(--sd-fs-sm);

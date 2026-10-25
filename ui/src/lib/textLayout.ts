@@ -117,6 +117,20 @@ function fitScale(w: number, maxW: number): number {
   return maxW > 0 && w > maxW ? maxW / w : 1
 }
 
+/**
+ * 合成加粗。
+ *
+ * 内置字体只有一档字重(本身就是粗体),把字转成路径之后 `font-weight` 完全无效——
+ * 这正是「自定义文字元素加粗没反应」的原因。改为沿轮廓加一圈同色描边:
+ * stroke 以轮廓为中心向内外各扩 w/2,视觉上就是笔画变粗。
+ * 系数取字号的比例,换字号时粗细观感保持一致。
+ */
+function boldAttrs(fontSize: number, color: string, bold: boolean): string {
+  if (!bold) return ''
+  const w = Math.round(fontSize * 0.035 * 100) / 100
+  return ` stroke="${esc(color)}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"`
+}
+
 /** 按锚点对齐:返回整段左边缘的 x(未压缩坐标系) */
 function alignedLeft(x: number, width: number, anchor: AnchorAlign): number {
   if (anchor === 'end') return x - width
@@ -141,7 +155,7 @@ function layoutVertical(
     glyphs.forEach((g, i) => {
       d += pathToD(font.getPath(g.char, x - g.advance / 2, startY + i * step, fontSize))
     })
-    return `<path d="${d}" fill="${esc(color)}"/>`
+    return `<path d="${d}" fill="${esc(color)}"${boldAttrs(fontSize, color, bold)}/>`
   }
   const weight = bold ? 'bold' : 'normal'
   return glyphs
@@ -184,7 +198,7 @@ function layoutArc(
         (sx !== 1 ? ` scale(${r4(sx)} 1)` : '')
       if (font) {
         return `<path transform="${tf}" d="${pathToD(font.getPath(g.char, 0, 0, fontSize))}" ` +
-          `fill="${esc(color)}"/>`
+          `fill="${esc(color)}"${boldAttrs(fontSize, color, bold)}/>`
       }
       return `<text transform="${tf}" font-family="sans-serif" font-weight="${weight}" ` +
         `font-size="${fontSize}" fill="${esc(color)}" text-anchor="middle">${esc(g.char)}</text>`
@@ -228,7 +242,7 @@ export function layoutRun(
       d += pathToD(font.getPath(g.char, g.offset, y, fontSize))
     }
     const tf = `translate(${r2(left)} 0)` + (sx !== 1 ? ` scale(${r4(sx)} 1)` : '')
-    return `<path transform="${tf}" d="${d}" fill="${esc(color)}"/>`
+    return `<path transform="${tf}" d="${d}" fill="${esc(color)}"${boldAttrs(fontSize, color, bold)}/>`
   }
 
   const weight = bold ? 'bold' : 'normal'

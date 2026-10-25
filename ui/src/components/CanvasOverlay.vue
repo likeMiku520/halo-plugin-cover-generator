@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { Anchor, CoverState } from '../lib/types'
 import {
-  anchorOfTargets, hitTest, useCanvasDrag,
+  anchorOfTargets, canDeleteSelection, hitTest, useCanvasDrag,
   type AnchorPatch, type CanvasPoint, type SelectionId,
 } from '../composables/useCanvasInteraction'
 import { builtinBoxes, customBoxes, type ElementBox } from '../lib/elementGeometry'
@@ -10,11 +10,14 @@ import { createMeasure, makeCtx, type FontLike } from '../lib/svgBuilder'
 import type { Guide } from '../lib/smartGuides'
 
 /**
- * 预览画布上的交互层：选中指示、拖动改位置、滚轮改大小、智能参考线。
+ * 预览画布上的交互层：选中指示与手柄、拖动改位置、滚轮改大小、旋转、删除、智能参考线。
  *
  * 命中判定用 elementGeometry 的包围盒（与渲染共用同一套度量），
  * 指针位置换算成画布比例后与锚点同坐标，因此预览缩放多少都不影响手感。
  * 写回状态一律走 emit，由工作台经既有更新路径落盘——画布不持有一份自己的状态。
+ *
+ * 本层不再整体 aria-hidden：框角上的手柄是真实控件，必须能被辅助技术找到；
+ * 纯装饰的部分（标签文字、参考线）各自标 aria-hidden。
  */
 const props = withDefaults(defineProps<{
   state: CoverState
@@ -27,10 +30,13 @@ const props = withDefaults(defineProps<{
 }>(), { guides: false })
 
 const emit = defineEmits<{
-  (e: 'select', id: SelectionId): void
+  /** 选中变化：命中元素传其 id，点空白区域传 null（取消选中） */
+  (e: 'select', id: SelectionId | null): void
   (e: 'anchor', id: SelectionId, patch: AnchorPatch): void
-  /** 画布交互（拖动/滚轮）开始与结束：工作台据此让预览跟手 */
+  /** 画布交互（拖动/旋转/滚轮）开始与结束：工作台据此让预览跟手 */
   (e: 'interacting', on: boolean): void
+  /** 点选中框上的 ×：具体动作由 deleteSelection 决定，画布不做策略 */
+  (e: 'delete', id: SelectionId): void
 }>()
 
 const ctx = computed(() => makeCtx(props.state.canvas))
@@ -79,7 +85,8 @@ function guideStyle(g: Guide): Record<string, string> {
 
 const root = ref<HTMLElement>()
 const {
-  guides: activeGuides, dragging, interacting, begin, move, end, scaleByWheel, markWheelActivity,
+  guides: activeGuides, dragging, rotating, interacting,
+  begin, move, beginRotate, rotateTo, end, scaleByWheel, markWheelActivity,
 } = useCanvasDrag()
 
 /**
@@ -113,7 +120,13 @@ function onPointerDown(ev: PointerEvent) {
   const hit = hitTest({
     boxes: boxes.value, point, canvas: props.state.canvas, layers: props.state.layers,
   })
-  if (!hit) return // 空白处：不改选中，也不进入拖动
+  if (!hit) {
+    // 空白处：取消选中（标题不可删除，这是退出标题编辑的主路径）。
+    // 点在自己那圈选中框上不算空白——框比图元外扩 6px，贴着边缘调整时不该把选中弄丢。
+    const inRing = !!(ev.target as Element | null)?.closest?.('.ring')
+    if (props.selected !== null && !inRing) emit('select', null)
+    return
+  }
   const anchor = anchorOf(hit)
   const box = boxes.value.find((b) => b.id === hit)
   if (!anchor || !box) return
@@ -132,10 +145,33 @@ function onPointerDown(ev: PointerEvent) {
   }
 }
 
-function onPointerMove(ev: PointerEvent) {
-  if (!dragging.value) return
+/** 按下旋转手柄：进入旋转会话。手柄自带 stop，事件不会走到整层的按下逻辑 */
+function onRotateStart(ev: PointerEvent, box: ElementBox) {
+  ev.stopPropagation() // 不让整层把这次按下当成「点空白」或「拖动元素」
   const point = pointOf(ev)
   if (!point) return
+  const anchor = anchorOf(box.id as SelectionId)
+  if (!anchor) return
+  ev.preventDefault() // 旋转期间不要顺带选中页面文字
+  beginRotate({ id: box.id as SelectionId, anchor, canvas: props.state.canvas, point })
+}
+
+/** 手柄上的按下只属于手柄自己：× 按钮不需要按住拖动，但同样不能冒泡成取消选中 */
+function onHandlePress(ev: PointerEvent) {
+  ev.stopPropagation()
+  ev.preventDefault()
+}
+
+function onPointerMove(ev: PointerEvent) {
+  if (!dragging.value && !rotating.value) return
+  const point = pointOf(ev)
+  if (!point) return
+  if (rotating.value) {
+    const turned = rotateTo(point, props.state.canvas)
+    if (!turned) return
+    emit('anchor', turned.id, { rotation: turned.rotation })
+    return
+  }
   const next = move(point, {
     canvas: props.state.canvas, boxes: boxes.value, snap: props.guides,
   })
@@ -145,6 +181,11 @@ function onPointerMove(ev: PointerEvent) {
 
 function onPointerEnd() {
   end()
+}
+
+/** 点选中框上的 ×：只上报意图，动作策略由 deleteSelection 统一决定 */
+function onDelete(id: string) {
+  emit('delete', id as SelectionId)
 }
 
 function onWheel(ev: WheelEvent) {
@@ -167,8 +208,7 @@ function onWheel(ev: WheelEvent) {
   <div
     ref="root"
     class="ov"
-    :class="{ 'is-dragging': dragging }"
-    aria-hidden="true"
+    :class="{ 'is-dragging': dragging, 'is-rotating': rotating }"
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
     @pointerup="onPointerEnd"
@@ -181,11 +221,26 @@ function onWheel(ev: WheelEvent) {
         class="ring"
         :style="ringStyle(box)"
       >
-        <span class="tag">{{ box.label }}</span>
+        <span class="tag" aria-hidden="true">{{ box.label }}</span>
+        <!-- 手柄放在选中框内部：框随元素旋转，手柄也就跟着转到该在的角上 -->
+        <button
+          v-if="canDeleteSelection(box.id as SelectionId)"
+          type="button"
+          class="handle handle-delete"
+          aria-label="删除元素"
+          @pointerdown="onHandlePress"
+          @click.stop="onDelete(box.id)"
+        >×</button>
+        <button
+          type="button"
+          class="handle handle-rotate"
+          aria-label="旋转元素"
+          @pointerdown="onRotateStart($event, box)"
+        ></button>
       </div>
     </template>
 
-    <div v-if="guides" class="guides">
+    <div v-if="guides" class="guides" aria-hidden="true">
       <div
         v-for="g in activeGuides"
         :key="g.axis"
@@ -220,8 +275,9 @@ function onWheel(ev: WheelEvent) {
     height var(--sd-dur-move) var(--sd-ease);
 }
 
-/* 拖动中关掉过渡：选中框若还在做位移补间，会明显落后于跟手的图元 */
-.ov.is-dragging .ring {
+/* 拖动/旋转中关掉过渡：选中框若还在做补间，会明显落后于跟手的图元 */
+.ov.is-dragging .ring,
+.ov.is-rotating .ring {
   transition: none;
 }
 
@@ -236,6 +292,51 @@ function onWheel(ev: WheelEvent) {
   background: var(--sd-accent-strong);
   border-radius: var(--sd-r-pill);
   white-space: nowrap;
+}
+
+/* 选中框角上的手柄：旋转在右下、删除在右上。
+ * 配色只取主题青那一族（--sd-accent*），不引入新色 */
+.handle {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1.5px solid var(--sd-accent-strong);
+  background: var(--sd-accent);
+  color: var(--sd-text-on-accent);
+  cursor: pointer;
+  /* 手柄要能按住拖动/点击，不能被选中框的样式吃掉指针事件 */
+  pointer-events: auto;
+}
+
+.handle-rotate {
+  right: -7px;
+  bottom: -7px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  cursor: grab;
+  /* 抓取光标与旋转语义一致；按下后由浏览器接管指针捕获 */
+  touch-action: none;
+}
+
+.handle-rotate:active {
+  cursor: grabbing;
+}
+
+.handle-delete {
+  right: -7px;
+  top: -9px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--sd-r-pill);
+  font-size: var(--sd-fs-sm);
+  line-height: 1;
+}
+
+.handle:focus-visible {
+  outline: 2px solid var(--sd-accent-deep);
+  outline-offset: 1px;
 }
 
 /* 参考线层：纯指示，不参与命中 */

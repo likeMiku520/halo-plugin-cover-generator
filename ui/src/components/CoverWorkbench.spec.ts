@@ -862,6 +862,13 @@ describe('CoverWorkbench', () => {
       return ev
     }
 
+    /** 在某具体元素上派发(手柄这类子节点) */
+    function pointerOn(el: Element, type: string, init: { clientX?: number; clientY?: number } = {}) {
+      const ev = new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, ...init })
+      el.dispatchEvent(ev)
+      return ev
+    }
+
     function wheel(wrapper: VueWrapper, deltaY: number) {
       const ev = new WheelEvent('wheel', { deltaY, cancelable: true, bubbles: true })
       wrapper.find('.ov').element.dispatchEvent(ev)
@@ -1194,6 +1201,162 @@ describe('CoverWorkbench', () => {
       // 标题字号不受这些滚动影响
       expect(renderedTitleFontSize(wrapper)).toBe(105)
       wrapper.unmount()
+    })
+
+    it('点空白取消选中:选中框与手柄消失,面板回到未选中态', async () => {
+      const { wrapper, canvas } = await mountStage()
+      await builtinRow(wrapper, '标题').trigger('click')
+      expect(builtinRow(wrapper, '标题').attributes('aria-pressed')).toBe('true')
+      expect(wrapper.find('.handle-rotate').exists()).toBe(true)
+
+      // 右下角是空白(标题图元之外)
+      pointer(wrapper, 'pointerdown', { clientX: 60, clientY: canvas.height - 20 })
+      await nextTick()
+
+      expect(builtinRow(wrapper, '标题').attributes('aria-pressed')).toBe('false')
+      expect(wrapper.find('.ring').exists()).toBe(false)
+      expect(wrapper.find('.handle-rotate').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('点中元素不取消选中(与点空白相反)', async () => {
+      const { wrapper, canvas } = await mountStage()
+      await builtinRow(wrapper, '标题').trigger('click')
+
+      pointer(wrapper, 'pointerdown', { clientX: canvas.width * 0.5, clientY: canvas.height * 0.5 })
+      await nextTick()
+
+      expect(builtinRow(wrapper, '标题').attributes('aria-pressed')).toBe('true')
+      // 没有别的选中目标被点出来(仍停在标题上)
+      expect(anchorsOf(wrapper, '标题')).toEqual([50, 50, 100])
+      wrapper.unmount()
+    })
+
+    it('参考线阈值上调后更容易吸附:偏离 1% 也会吸到画布中线', async () => {
+      const { wrapper, canvas } = await mountStage()
+      const toggle = wrapper.findAll('label').find((l) => l.text().includes('智能参考线'))!
+      await toggle.find('input').setValue(true)
+      await builtinRow(wrapper, '标题').trigger('click')
+
+      // 原始位置 51%(与 50% 差 1%：旧阈值 0.6% 吸不住，新阈值 1.2% 能吸上)
+      pointer(wrapper, 'pointerdown', { clientX: canvas.width * 0.5, clientY: canvas.height * 0.5 })
+      await nextTick()
+      pointer(wrapper, 'pointermove', { clientX: canvas.width * 0.51, clientY: canvas.height * 0.7 })
+      await nextTick()
+
+      expect(anchorsOf(wrapper, '标题')[0]).toBe(50)
+      expect(wrapper.findAll('.guide-x')).toHaveLength(1)
+      pointer(wrapper, 'pointerup')
+      wrapper.unmount()
+    })
+
+    it('拖旋转手柄:元素即刻旋转,面板角度随之更新(拖动期间不走防抖)', async () => {
+      const { wrapper, canvas } = await mountStage()
+      await builtinRow(wrapper, '标题').trigger('click')
+      const before = previewSvg(wrapper)
+      // 标题锚点在画布正中：旋转以它为圆心
+      const cx = canvas.width * 0.5
+      const cy = canvas.height * 0.5
+
+      pointerOn(wrapper.find('.handle-rotate').element, 'pointerdown', {
+        clientX: cx + 100, clientY: cy,
+      })
+      await nextTick()
+      pointer(wrapper, 'pointermove', { clientX: cx, clientY: cy + 100 }) // 转到正下方 ⇒ 90°
+      await nextTick()
+
+      // 立即渲染：预览已经带上旋转，而不是等 150ms 合帧
+      expect(previewSvg(wrapper)).not.toBe(before)
+      expect(previewSvg(wrapper)).toContain('rotate(90')
+      const rotationInput = wrapper.find('input[aria-label="旋转(数值)"]')
+      expect((rotationInput.element as HTMLInputElement).value).toBe('90')
+      pointer(wrapper, 'pointerup')
+      wrapper.unmount()
+    })
+
+    describe('选中框上的 ×', () => {
+      it('标题不显示 ×(标题不可删除),点空白是退出标题编辑的主路径', async () => {
+        const { wrapper, canvas } = await mountStage()
+        await builtinRow(wrapper, '标题').trigger('click')
+        expect(wrapper.find('.handle-rotate').exists()).toBe(true)
+        expect(wrapper.find('.handle-delete').exists()).toBe(false)
+
+        pointer(wrapper, 'pointerdown', { clientX: 60, clientY: canvas.height - 20 })
+        await nextTick()
+        expect(builtinRow(wrapper, '标题').attributes('aria-pressed')).toBe('false')
+        wrapper.unmount()
+      })
+
+      it('Logo:只关闭显示,用户已选的图仍在', async () => {
+        const base = defaultCoverState()
+        seedArchive({ logoDataUrl: 'data:image/png;base64,AAAA', logoHidden: false, layers: base.layers })
+        const { wrapper } = await mountStage()
+        await builtinRow(wrapper, 'Logo').trigger('click')
+        await wrapper.find('.handle-delete').trigger('click')
+        await nextTick()
+
+        expect(wrapper.find('button[role="switch"]').attributes('aria-checked')).toBe('false')
+        expect(wrapper.findAll('button').map((b) => b.text())).toContain('恢复默认')
+        wrapper.unmount()
+      })
+
+      it('副标题:清空输入框', async () => {
+        seedArchive({ subtitle: '副标题' })
+        const { wrapper } = await mountStage()
+        await builtinRow(wrapper, '副标题').trigger('click')
+        await wrapper.find('.handle-delete').trigger('click')
+        await nextTick()
+
+        expect((wrapper.find('input[aria-label="副标题"]').element as HTMLInputElement).value).toBe('')
+        wrapper.unmount()
+      })
+
+      it('水印:清空输入框', async () => {
+        seedArchive({ watermark: 'example.com' })
+        const { wrapper } = await mountStage()
+        await builtinRow(wrapper, '水印').trigger('click')
+        await wrapper.find('.handle-delete').trigger('click')
+        await nextTick()
+
+        expect((wrapper.find('input[aria-label="域名水印"]').element as HTMLInputElement).value).toBe('')
+        wrapper.unmount()
+      })
+
+      it('自定义元素:真删除、图层同步移除、选中态清空', async () => {
+        seedCustomElement('text')
+        const { wrapper } = await mountStage()
+        await wrapper.find('button.el-name').trigger('click')
+        expect(wrapper.findAll('.el-row.custom')).toHaveLength(1)
+
+        await wrapper.find('.handle-delete').trigger('click')
+        await nextTick()
+
+        expect(wrapper.findAll('.el-row.custom')).toHaveLength(0) // 元素没了
+        expect(wrapper.find('.ring').exists()).toBe(false) // 选中态清空
+        expect(wrapper.find('input[aria-label="水平(数值)"]').exists()).toBe(false) // 详情滑杆一起收起
+        wrapper.unmount()
+      })
+
+      it('旋转对所有元素通用:自定义元素同样写回自己的 anchor.rotation', async () => {
+        seedCustomElement('text')
+        const { wrapper, canvas } = await mountStage()
+        await wrapper.find('button.el-name').trigger('click')
+
+        // 自定义元素出厂锚点在画布正中，旋转以它为圆心
+        const cx = canvas.width * 0.5
+        const cy = canvas.height * 0.5
+        pointerOn(wrapper.find('.handle-rotate').element, 'pointerdown', {
+          clientX: cx + 100, clientY: cy,
+        })
+        await nextTick()
+        pointer(wrapper, 'pointermove', { clientX: cx, clientY: cy + 100 })
+        await nextTick()
+
+        const rotationInput = wrapper.find('input[aria-label="旋转(数值)"]')
+        expect((rotationInput.element as HTMLInputElement).value).toBe('90')
+        pointer(wrapper, 'pointerup')
+        wrapper.unmount()
+      })
     })
   })
 })

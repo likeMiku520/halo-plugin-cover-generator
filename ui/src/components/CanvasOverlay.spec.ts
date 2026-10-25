@@ -41,13 +41,15 @@ function stubRect(el: Element, width: number, height: number) {
 function mountOverlay(state: CoverState, o: {
   selected?: SelectionId | null
   guides?: boolean
+  /** 内置默认 Logo 是否可用：决定 Logo 有没有命中框（也就有没有选中框与手柄） */
+  hasLogo?: boolean
 } = {}) {
   const wrapper = mount(CanvasOverlay, {
     props: {
       state,
       selected: o.selected ?? null,
       font: null,
-      hasLogo: false,
+      hasLogo: o.hasLogo ?? false,
       guides: o.guides ?? false,
     },
   })
@@ -56,7 +58,7 @@ function mountOverlay(state: CoverState, o: {
 }
 
 type AnchorEmits = [SelectionId, AnchorPatch][]
-type SelectEmits = [SelectionId][]
+type SelectEmits = [SelectionId | null][]
 
 const anchorEmits = (w: VueWrapper) => (w.emitted('anchor') ?? []) as AnchorEmits
 const selectEmits = (w: VueWrapper) => (w.emitted('select') ?? []) as SelectEmits
@@ -72,6 +74,17 @@ const lastAnchor = (w: VueWrapper) => anchorEmits(w)[anchorEmits(w).length - 1]
 function pointer(w: VueWrapper, type: string, init: { clientX?: number; clientY?: number } = {}) {
   const ev = new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, ...init })
   w.element.dispatchEvent(ev)
+  return ev
+}
+
+/** 在某具体元素上派发事件（手柄这类子节点：要验证它们不被整层逻辑吃掉） */
+function pointerOn(
+  el: Element,
+  type: string,
+  init: { clientX?: number; clientY?: number } = {},
+) {
+  const ev = new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, ...init })
+  el.dispatchEvent(ev)
   return ev
 }
 
@@ -140,7 +153,7 @@ describe('CanvasOverlay 拖动改位置', () => {
     expect(w.emitted('select')).toBeUndefined()
   })
 
-  it('点在空白处不拖动、也不改变选中', async () => {
+  it('点空白处:不拖动,并取消选中(没有选中时也不必发事件)', async () => {
     const w = mountOverlay(makeState(), { selected: null })
     pointer(w, 'pointerdown', { clientX: 60, clientY: 540 })
     await nextTick()
@@ -149,6 +162,33 @@ describe('CanvasOverlay 拖动改位置', () => {
     pointer(w, 'pointerup')
 
     expect(w.emitted('anchor')).toBeUndefined()
+    // 本来就没选中：不发无意义的事件
+    expect(w.emitted('select')).toBeUndefined()
+
+    const selected = mountOverlay(makeState(), { selected: 'title' })
+    pointer(selected, 'pointerdown', { clientX: 60, clientY: 540 })
+    await nextTick()
+
+    expect(selectEmits(selected)).toEqual([[null]])
+    expect(selected.emitted('anchor')).toBeUndefined()
+  })
+
+  it('点中元素仍不取消选中(与空白处相反)', async () => {
+    const w = mountOverlay(makeState(), { selected: 'title' })
+
+    pointer(w, 'pointerdown', { clientX: TITLE_CENTER[0], clientY: TITLE_CENTER[1] })
+    await nextTick()
+
+    expect(w.emitted('select')).toBeUndefined()
+  })
+
+  it('点在选中框自身(外扩的那几像素)上也当作选中该元素,不取消', async () => {
+    const w = mountOverlay(makeState(), { selected: 'title' })
+    // 选中框比图元外扩 6px：点框的左边缘落在图元之外，但不该把选中弄丢
+    const ring = w.find('.ring').element
+    pointerOn(ring, 'pointerdown', { clientX: 300, clientY: 300 })
+    await nextTick()
+
     expect(w.emitted('select')).toBeUndefined()
   })
 
@@ -368,5 +408,116 @@ describe('CanvasOverlay 交互信号(工作台据此让预览跟手)', () => {
     await nextTick()
 
     expect(w.emitted('interacting')).toEqual([[true]])
+  })
+})
+
+describe('CanvasOverlay 选中框手柄', () => {
+  /** 元素锚点在画布上的像素位置：旋转以它为圆心 */
+  const anchorPx = (state: CoverState, id: SelectionId) => {
+    const box = boxesOf(state).find((b) => b.id === id)!
+    return box.pivot ?? { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  }
+
+  it('未选中时不渲染任何手柄', () => {
+    const w = mountOverlay(makeState(), { selected: null })
+
+    expect(w.find('.handle-rotate').exists()).toBe(false)
+    expect(w.find('.handle-delete').exists()).toBe(false)
+  })
+
+  it('选中后右下角是旋转手柄、右上角是删除按钮,都带可访问名称', () => {
+    const w = mountOverlay(makeState({ subtitle: '副标题' }), { selected: 'subtitle' })
+
+    expect(w.find('.handle-rotate').attributes('aria-label')).toBe('旋转元素')
+    expect(w.find('.handle-delete').attributes('aria-label')).toBe('删除元素')
+    // 手柄是真实按钮：键盘也能聚焦并触发
+    expect(w.find('.handle-rotate').element.tagName).toBe('BUTTON')
+    expect(w.find('.handle-delete').element.tagName).toBe('BUTTON')
+  })
+
+  it('标题不渲染删除按钮(标题不可删除),其余元素都有', () => {
+    const title = mountOverlay(makeState(), { selected: 'title' })
+    expect(title.find('.handle-delete').exists()).toBe(false)
+    expect(title.find('.handle-rotate').exists()).toBe(true)
+
+    const logo = mountOverlay(makeState(), { selected: 'logo', hasLogo: true })
+    expect(logo.find('.handle-delete').exists()).toBe(true)
+
+    const custom = mountOverlay(makeState({ customElements: [customElement()] }), {
+      selected: 'custom:el-1',
+    })
+    expect(custom.find('.handle-delete').exists()).toBe(true)
+  })
+
+  it('拖旋转手柄写回 anchor.rotation,并即时进入交互态', async () => {
+    const state = makeState()
+    const w = mountOverlay(state, { selected: 'title' })
+    const center = anchorPx(state, 'title')
+
+    // 在手柄上按下：以「圆心正右方」为起始角
+    pointerOn(w.find('.handle-rotate').element, 'pointerdown', {
+      clientX: center.x + 100, clientY: center.y,
+    })
+    await nextTick()
+    // 按下手柄不改变选中、也不进入拖动
+    expect(w.emitted('select')).toBeUndefined()
+    expect(w.emitted('interacting')).toEqual([[true]])
+
+    // 指针转到圆心正下方 ⇒ 90°
+    pointer(w, 'pointermove', { clientX: center.x, clientY: center.y + 100 })
+    await nextTick()
+
+    expect(lastAnchor(w)).toEqual(['title', { rotation: 90 }])
+  })
+
+  it('旋转能到 ±180,越界收敛,松手结束交互', async () => {
+    const state = makeState()
+    const w = mountOverlay(state, { selected: 'title' })
+    const center = anchorPx(state, 'title')
+
+    pointerOn(w.find('.handle-rotate').element, 'pointerdown', {
+      clientX: center.x - 100, clientY: center.y, // 起始角 180°
+    })
+    await nextTick()
+    pointer(w, 'pointermove', { clientX: center.x, clientY: center.y - 100 }) // 转到 −90°
+    await nextTick()
+
+    // 180° → −90° 是 −270°，收敛到 −180°
+    expect(lastAnchor(w)).toEqual(['title', { rotation: -180 }])
+
+    pointer(w, 'pointerup')
+    await nextTick()
+    expect(w.emitted('interacting')).toEqual([[true], [false]])
+  })
+
+  it('旋转后再拖动位置仍是同一个元素(两个会话互不干扰)', async () => {
+    const state = makeState()
+    const w = mountOverlay(state, { selected: 'title' })
+    const center = anchorPx(state, 'title')
+
+    pointerOn(w.find('.handle-rotate').element, 'pointerdown', {
+      clientX: center.x + 100, clientY: center.y,
+    })
+    await nextTick()
+    pointer(w, 'pointermove', { clientX: center.x, clientY: center.y + 100 })
+    await nextTick()
+    pointer(w, 'pointerup')
+    await nextTick()
+
+    await drag(w, TITLE_CENTER, [720, 300])
+
+    expect(lastAnchor(w)).toEqual(['title', { x: 0.6, y: 0.5 }])
+  })
+
+  it('点删除按钮上报意图(策略由 deleteSelection 决定,画布不自己删)', async () => {
+    // 副标题要有文本才有命中框，也就才有选中框与手柄
+    const w = mountOverlay(makeState({ subtitle: '副标题' }), { selected: 'subtitle' })
+
+    await w.find('.handle-delete').trigger('click')
+
+    expect((w.emitted('delete') ?? []) as [SelectionId][]).toEqual([['subtitle']])
+    // 只上报:画布不写状态、也不改选中
+    expect(w.emitted('anchor')).toBeUndefined()
+    expect(w.emitted('select')).toBeUndefined()
   })
 })

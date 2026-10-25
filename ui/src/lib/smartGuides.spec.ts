@@ -34,7 +34,7 @@ describe('snapAnchor 画布中线', () => {
     expect(result.guides).toEqual([{ axis: 'x', position: 0.5 }])
   })
 
-  it('超出阈值(0.6%)不吸附、不给参考线', () => {
+  it('超出阈值(1.2%)不吸附、不给参考线', () => {
     const result = snapAnchor({
       box: boxAtCenter(0.5 + SNAP_THRESHOLD_RATIO + 0.001, 0.3),
       canvas: CANVAS,
@@ -43,6 +43,17 @@ describe('snapAnchor 画布中线', () => {
 
     expect(result.dx).toBe(0)
     expect(result.guides).toEqual([])
+  })
+
+  it('阈值上调后 1% 的偏离也能吸上(旧阈值 0.6% 时吸不住)', () => {
+    const result = snapAnchor({
+      box: boxAtCenter(0.51, 0.3),
+      canvas: CANVAS,
+      others: [],
+    })
+
+    expect(result.dx).toBeCloseTo(-0.01, 10)
+    expect(result.guides).toEqual([{ axis: 'x', position: 0.5 }])
   })
 
   it('阈值边界上仍然吸附(闭区间)', () => {
@@ -122,8 +133,9 @@ describe('snapAnchor 与其他元素对齐', () => {
   it('中心与边缘距离相同时优先「中心对中心」', () => {
     // 被拖元素:300–308px(中心 304)，另一元素:298–306px(中心 302)
     // 中心对中心 = 左缘对中心 = 2px，平局时必须选中心对中心
+    //（纵向放在画布下方：否则中心离 50% 只有 0.008，阈值上调后会多出一条横线）
     const other: AlignRect = { x: 298, y: 0, width: 8, height: 8 }
-    const dragged: AlignRect = { x: 300, y: 500, width: 8, height: 8 }
+    const dragged: AlignRect = { x: 300, y: 700, width: 8, height: 8 }
     const result = snapAnchor({ box: dragged, canvas: CANVAS, others: [other] })
 
     expect(result.dx).toBeCloseTo(ratio(302) - ratio(304), 10)

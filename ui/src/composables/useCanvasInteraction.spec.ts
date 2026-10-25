@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  anchorOfTargets, hitTest, useCanvasDrag, useCanvasInteraction,
+  anchorOfTargets, canDeleteSelection, deleteSelection, hitTest, useCanvasDrag, useCanvasInteraction,
   type AnchorSource, type SelectionId,
 } from './useCanvasInteraction'
-import type { Anchor, AnchorMap, LayerKey } from '../lib/types'
+import type { Anchor, AnchorMap, CustomElement, LayerKey } from '../lib/types'
 import type { ElementBox } from '../lib/elementGeometry'
 // scaleLimitsOf 的归属已收到 layout：滚轮与面板共用同一份，测试也直接对着它
-import { ELEMENT_SCALE_LIMITS, defaultAnchors, scaleLimitsOf } from '../lib/layout'
+import { ELEMENT_SCALE_LIMITS, defaultAnchors, defaultCoverState, scaleLimitsOf } from '../lib/layout'
 
 /**
  * 画布交互。
@@ -477,5 +477,164 @@ describe('useCanvasDrag 交互窗口(预览旁路防抖的信号)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('useCanvasDrag 旋转手柄', () => {
+  /** 正方形画布上以锚点为圆心的角度点：angle 以度计，0° 指向右、顺时针为正 */
+  const atAngle = (angle: number, radius = 100): { x: number; y: number } => {
+    const rad = (angle * Math.PI) / 180
+    return {
+      x: (512 + radius * Math.cos(rad)) / CANVAS.width,
+      y: (512 + radius * Math.sin(rad)) / CANVAS.height,
+    }
+  }
+
+  const beginRotateAt = (angle: number, rotation = 0) => {
+    const drag = useCanvasDrag()
+    drag.beginRotate({
+      id: 'title',
+      anchor: { ...anchorAt(0.5, 0.5), rotation },
+      canvas: CANVAS,
+      point: atAngle(angle),
+    })
+    return drag
+  }
+
+  it('写回的是「相对按下点转了多少度」,而不是绝对指针角', () => {
+    const drag = beginRotateAt(0)
+
+    // 指针从 0° 转到 90°（正下方）⇒ 旋转 +90°
+    expect(drag.rotateTo(atAngle(90), CANVAS)).toEqual({ id: 'title', rotation: 90 })
+    // 指针回到按下角 ⇒ 旋转回到 0，不会留下偏移
+    expect(drag.rotateTo(atAngle(0), CANVAS)?.rotation).toBe(0)
+  })
+
+  it('在手柄上抓住已旋转的元素继续转:在原角度上累加', () => {
+    const drag = beginRotateAt(0, 30)
+
+    expect(drag.rotateTo(atAngle(90), CANVAS)?.rotation).toBe(120)
+    expect(drag.rotateTo(atAngle(-30), CANVAS)?.rotation).toBe(0)
+  })
+
+  it('能转到 ±180,越界由 normalizeRotation 收敛', () => {
+    const drag = beginRotateAt(0)
+
+    // 转到 180°：正好落在边界上
+    expect(drag.rotateTo(atAngle(180), CANVAS)?.rotation).toBe(180)
+    // 从 180° 起逆时针横扫过 -90°（跨过 -180 的边界）⇒ 收敛到 -180
+    const reverse = beginRotateAt(180)
+    expect(reverse.rotateTo(atAngle(-90), CANVAS)?.rotation).toBe(-180)
+  })
+
+  it('非正方形画布上角度仍按像素算(比例坐标的 x/y 分母不同)', () => {
+    // 1024×512 上「像素坐标 45°」的点：比例上并不成 45°，直接对比例取 atan2 会算成 63°
+    const wide = { width: 1024, height: 512 }
+    const drag = useCanvasDrag()
+    drag.beginRotate({
+      id: 'title', anchor: anchorAt(0.5, 0.5), canvas: wide, point: { x: 612 / 1024, y: 0.5 },
+    })
+
+    const turned = drag.rotateTo({ x: 612 / 1024, y: (256 + 100) / 512 }, wide)
+
+    expect(turned?.rotation).toBeCloseTo(45, 6)
+  })
+
+  it('旋转期间 interacting 为真,松手复位;未进入会话时 rotateTo 返回 null', () => {
+    const drag = useCanvasDrag()
+    expect(drag.rotateTo(atAngle(90), CANVAS)).toBeNull()
+
+    drag.beginRotate({ id: 'logo', anchor: anchorAt(0.5, 0.5), canvas: CANVAS, point: atAngle(0) })
+    expect(drag.rotating.value).toBe(true)
+    expect(drag.interacting.value).toBe(true) // 预览据此旁路防抖，旋转才跟手
+
+    drag.end()
+    expect(drag.rotating.value).toBe(false)
+    expect(drag.interacting.value).toBe(false)
+    expect(drag.rotateTo(atAngle(90), CANVAS)).toBeNull()
+  })
+})
+
+describe('deleteSelection 删除策略(唯一一份)', () => {
+  const withCustom = (): CustomElement[] => [{
+    id: 'el-1',
+    kind: 'image',
+    content: 'data:image/png;base64,AAAA',
+    text: '',
+    size: 200,
+    anchor: anchorAt(0.5, 0.5),
+    color: '#ffffff',
+    bold: false,
+    tracking: 0,
+    curve: 0,
+    direction: 'horizontal',
+    aspect: 1,
+  }]
+
+  it('标题不可删除:策略返回 null,× 按钮也不该渲染', () => {
+    const state = defaultCoverState()
+    expect(deleteSelection(state, 'title')).toBeNull()
+    expect(canDeleteSelection('title')).toBe(false)
+  })
+
+  it('Logo 只关闭显示,不动用户已选的图', () => {
+    const state = { ...defaultCoverState(), logoHidden: false, logoDataUrl: 'data:image/png;base64,AA' }
+    const result = deleteSelection(state, 'logo')
+
+    expect(result?.patch).toEqual({ logoHidden: true })
+    expect(result?.clearSelection).toBe(false)
+    // 图还在:再次打开开关就能看到，不需要重新上传
+    expect(state.logoDataUrl).toBe('data:image/png;base64,AA')
+  })
+
+  it('副标题与水印清空各自的输入框,元素本身仍在', () => {
+    const state = { ...defaultCoverState(), subtitle: '副标题', watermark: 'example.com' }
+
+    expect(deleteSelection(state, 'subtitle')?.patch).toEqual({ subtitle: '' })
+    expect(deleteSelection(state, 'watermark')?.patch).toEqual({ watermark: '' })
+    expect(deleteSelection(state, 'subtitle')?.clearSelection).toBe(false)
+  })
+
+  it('自定义元素真删除:同时从图层表移除并清掉选中态', () => {
+    const base = defaultCoverState()
+    const state = {
+      ...base,
+      customElements: withCustom(),
+      layers: [...base.layers, 'custom:el-1' as LayerKey],
+    }
+
+    const result = deleteSelection(state, 'custom:el-1')
+
+    expect(result?.patch.customElements).toEqual([])
+    expect(result?.patch.layers).toEqual(base.layers)
+    expect(result?.patch.layers).not.toContain('custom:el-1')
+    expect(result?.clearSelection).toBe(true)
+    expect(canDeleteSelection('custom:el-1')).toBe(true)
+  })
+
+  it('删除只影响目标元素:其余自定义元素与图层顺序保持原样', () => {
+    const base = defaultCoverState()
+    const second = { ...withCustom()[0], id: 'el-2' }
+    const state = {
+      ...base,
+      customElements: [...withCustom(), second],
+      layers: [...base.layers, 'custom:el-1' as LayerKey, 'custom:el-2' as LayerKey],
+    }
+
+    const result = deleteSelection(state, 'custom:el-2')
+
+    expect(result?.patch.customElements?.map((el) => el.id)).toEqual(['el-1'])
+    expect(result?.patch.layers).toEqual([...base.layers, 'custom:el-1'])
+  })
+
+  it('策略是纯函数:不改动传入的状态', () => {
+    const base = defaultCoverState()
+    const state = { ...base, customElements: withCustom(), subtitle: '副标题' }
+    const snapshot = JSON.parse(JSON.stringify(state))
+
+    deleteSelection(state, 'custom:el-1')
+    deleteSelection(state, 'subtitle')
+
+    expect(JSON.parse(JSON.stringify(state))).toEqual(snapshot)
   })
 })

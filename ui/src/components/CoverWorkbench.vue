@@ -13,7 +13,8 @@ import { BUILTIN_FONT_URL } from '../lib/fontLoader'
 import { CANVAS, normalizeAnchor } from '../lib/layout'
 import type { Anchor } from '../lib/types'
 import {
-  anchorOfTargets, useCanvasInteraction, type AnchorPatch, type SelectionId,
+  anchorOfTargets, deleteSelection, useCanvasInteraction,
+  type AnchorPatch, type SelectionId,
 } from '../composables/useCanvasInteraction'
 import ControlPanel from './ControlPanel.vue'
 import CoverPreview from './CoverPreview.vue'
@@ -57,8 +58,8 @@ const TITLE_FONT_MAX = CANVAS.TITLE_BASE
 
 /** 选中目标的锚点写入:内置元素进 layout,自定义元素进 customElements。
  *
- * 以现有锚点为底、只覆盖本次改动的字段:拖动/滚轮/键盘只改位置与倍率,
- * 若从零构造锚点对象,后加的透明度与旋转会被一并抹回默认值。
+ * 以现有锚点为底、只覆盖本次改动的字段:拖动/滚轮/旋转/键盘各改各的,
+ * 若从零构造锚点对象,没提到的字段(透明度等)会被一并抹回默认值。
  */
 function applyAnchor(id: SelectionId, next: AnchorPatch) {
   const base = anchorOfId(id)
@@ -82,7 +83,14 @@ function applyAnchor(id: SelectionId, next: AnchorPatch) {
     return
   }
 
-  const anchor = normalizeAnchor({ ...base, x, y, scale: next.scale ?? base.scale })
+  // 旋转对所有元素通用:都落在各自锚点的 rotation 上,由 normalizeAnchor 收敛进 ±180
+  const anchor = normalizeAnchor({
+    ...base,
+    x,
+    y,
+    scale: next.scale ?? base.scale,
+    rotation: next.rotation ?? base.rotation,
+  })
   if (id.startsWith('custom:')) {
     const target = id.slice('custom:'.length)
     state.value.customElements = state.value.customElements.map((el) =>
@@ -96,6 +104,19 @@ function applyAnchor(id: SelectionId, next: AnchorPatch) {
 /** 取某选中目标的完整锚点(内置元素在 layout,自定义元素在 customElements) */
 function anchorOfId(id: SelectionId): Anchor | null {
   return anchorOfTargets(state.value, id)
+}
+
+/**
+ * 选中框上的 ×。
+ *
+ * 动作策略只有 deleteSelection 一份(Logo 关显示/副标题水印清空/自定义元素真删除);
+ * 这里只负责把补丁并进状态,并在元素真的消失时清掉选中态——否则选中态会指向不存在的目标。
+ */
+function onCanvasDelete(id: SelectionId) {
+  const result = deleteSelection(state.value, id)
+  if (!result) return
+  state.value = { ...state.value, ...result.patch }
+  if (result.clearSelection && canvasSelection.value === id) selectCanvas(null)
 }
 
 /** 键盘微调:方向键 1 步、Shift 10 步;无选中时不拦截按键 */
@@ -434,6 +455,7 @@ const permalinkHref = computed(() =>
             @select="selectCanvas"
             @anchor="applyAnchor"
             @interacting="onCanvasInteracting"
+            @delete="onCanvasDelete"
           ></CanvasOverlay>
         </CoverPreview>
       </div>

@@ -1,6 +1,6 @@
 import { computed, getCurrentScope, onScopeDispose, ref } from 'vue'
-import type { Anchor, AnchorKey, AnchorMap, CanvasSize, LayerKey } from '../lib/types'
-import { CANVAS, scaleLimitsOf } from '../lib/layout'
+import type { Anchor, AnchorKey, AnchorMap, CanvasSize, CoverState, LayerKey } from '../lib/types'
+import { CANVAS, normalizeRotation, scaleLimitsOf } from '../lib/layout'
 import type { ElementBox } from '../lib/elementGeometry'
 import { snapAnchor, type AlignRect, type Guide } from '../lib/smartGuides'
 
@@ -23,13 +23,15 @@ export function anchorLabel(key: AnchorKey): string {
 /**
  * 画布交互写回状态的最小字段集。
  *
- * 只列交互真正会改的字段：透明度与旋转由面板负责，
- * 交互回写时以现有锚点为底合并，绝不能因为「没提这两个字段」而把它们抹回默认值。
+ * 只列交互真正会改的字段：透明度由面板负责，
+ * 交互回写时以现有锚点为底合并，绝不能因为「没提这个字段」而把它抹回默认值。
  */
 export interface AnchorPatch {
   x?: number
   y?: number
   scale?: number
+  /** 旋转角（度）：旋转手柄写回，由写回路径的 normalizeRotation 收敛进 ±180 */
+  rotation?: number
 }
 
 /** 微调步长：方向键 1 步，Shift+方向键 10 步（单位为画布宽/高的千分之一） */
@@ -113,6 +115,44 @@ export interface CanvasPoint {
   y: number
 }
 
+/**
+ * 选中元素能否删除（即选中框右上角是否显示 ×）。
+ * 标题不可删除：标题一旦清掉，这张封面就没有主体了；要退出标题编辑走「点空白取消选中」。
+ */
+export function canDeleteSelection(id: SelectionId): boolean {
+  return id !== 'title'
+}
+
+export interface DeleteResult {
+  /** 并入状态的补丁；调用方负责合并，策略本身不碰状态容器 */
+  patch: Partial<CoverState>
+  /** 是否同时清掉选中态：元素真的没了才清，避免选中态指向不存在的目标 */
+  clearSelection: boolean
+}
+
+/**
+ * 选中元素上「×」的动作策略——唯一一份。
+ *
+ * Logo 只关显示（不删用户选的图）、副标题/水印清空输入、自定义元素真删除并同步图层表；
+ * 标题返回 null（按钮也不渲染）。放在这里而不是散进组件：画布与面板日后各加入口时，
+ * 策略仍然只有这一处，不会出现「某个入口删得掉、另一个删不掉」。
+ */
+export function deleteSelection(state: CoverState, id: SelectionId): DeleteResult | null {
+  if (!canDeleteSelection(id)) return null
+  if (id === 'logo') return { patch: { logoHidden: true }, clearSelection: false }
+  if (id === 'subtitle') return { patch: { subtitle: '' }, clearSelection: false }
+  if (id === 'watermark') return { patch: { watermark: '' }, clearSelection: false }
+  const target = id.slice('custom:'.length)
+  return {
+    patch: {
+      customElements: state.customElements.filter((el) => el.id !== target),
+      // 图层表必须同步清理：留着已删除的键，绘制次序里就会挂着一个不存在的元素
+      layers: state.layers.filter((key) => key !== (`custom:${target}` as LayerKey)),
+    },
+    clearSelection: true,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 画布指针交互（拖动 / 滚轮 / 参考线）
 //
@@ -164,6 +204,27 @@ interface DragSession {
   start: CanvasPoint
 }
 
+/** 一次旋转会话：以元素锚点为圆心，记下按下时的指针角与当时的旋转角 */
+interface RotateSession {
+  id: SelectionId
+  origin: Anchor
+  /** 圆心（画布比例）：就是元素锚点，渲染层也是绕它转的 */
+  center: CanvasPoint
+  startAngle: number
+}
+
+/**
+ * 指针相对圆心的角度（度）。
+ *
+ * 必须换算到画布像素再算：比例坐标的 x/y 分母不同（宽 vs 高），
+ * 直接对比例值取 atan2 会让非正方形画布上的角度整体歪掉。
+ */
+function angleOf(point: CanvasPoint, center: CanvasPoint, canvas: CanvasSize): number {
+  const dx = (point.x - center.x) * canvas.width
+  const dy = (point.y - center.y) * canvas.height
+  return (Math.atan2(dy, dx) * 180) / Math.PI
+}
+
 /** 滚轮一格（约 100px）约 2%：再大就跳格，再小则长滚也不动 */
 const WHEEL_PERCENT_PER_PIXEL = 0.02
 /** 行模式(deltaMode=1)与页模式(2)折算成像素：各家浏览器给出的单位差异极大 */
@@ -203,12 +264,14 @@ export function useCanvasDrag() {
   const guides = ref<Guide[]>([])
   const dragging = ref(false)
   const wheeling = ref(false)
+  const rotating = ref(false)
   /**
-   * 是否正处于一次画布交互（拖动或滚轮窗口）中。
+   * 是否正处于一次画布交互（拖动/旋转/滚轮窗口）中。
    * 预览层据此旁路渲染防抖：防抖是为打字合帧，交互期间它只会让图元落后于指针。
    */
-  const interacting = computed(() => dragging.value || wheeling.value)
+  const interacting = computed(() => dragging.value || rotating.value || wheeling.value)
   let session: DragSession | null = null
+  let rotateSession: RotateSession | null = null
   /** 不足一个百分点的零头：攒到下一次滚轮，慢滚时既不「纹丝不动」也不跳格 */
   let wheelRemainder = 0
   let wheelIdleTimer: ReturnType<typeof setTimeout> | undefined
@@ -272,8 +335,39 @@ export function useCanvasDrag() {
   /** 结束拖动：参考线只属于拖动过程，松手即消失 */
   function end() {
     session = null
+    rotateSession = null
     dragging.value = false
+    rotating.value = false
     guides.value = []
+  }
+
+  /**
+   * 进入旋转：以按下瞬间的指针角为基准，之后写回的是「转了这么多度」而不是绝对角，
+   * 这样手柄抓在哪、元素就从哪个角度开始转，不会一按下就跳到某个固定角度。
+   */
+  function beginRotate(o: {
+    id: SelectionId; anchor: Anchor; canvas: CanvasSize; point: CanvasPoint
+  }) {
+    const center = { x: o.anchor.x, y: o.anchor.y }
+    rotateSession = {
+      id: o.id,
+      origin: { ...o.anchor },
+      center,
+      startAngle: angleOf(o.point, center, o.canvas),
+    }
+    rotating.value = true
+  }
+
+  /** 指针移动：返回该写回的旋转角；未在旋转中返回 null */
+  function rotateTo(
+    point: CanvasPoint,
+    canvas: CanvasSize,
+  ): { id: SelectionId; rotation: number } | null {
+    const r = rotateSession
+    if (!r) return null
+    const delta = angleOf(point, r.center, canvas) - r.startAngle
+    // 收敛交给 normalizeRotation：面板滑杆与旋转手柄共用同一套 ±180 边界
+    return { id: r.id, rotation: normalizeRotation(r.origin.rotation + delta) }
   }
 
   /**
@@ -311,5 +405,8 @@ export function useCanvasDrag() {
     }, WHEEL_IDLE_MS)
   }
 
-  return { guides, dragging, wheeling, interacting, begin, move, end, scaleByWheel, markWheelActivity }
+  return {
+    guides, dragging, rotating, wheeling, interacting,
+    begin, move, beginRotate, rotateTo, end, scaleByWheel, markWheelActivity,
+  }
 }

@@ -4,7 +4,7 @@
 
 > 上游渊源:本项目派生自 [baoxinwen/halo-plugin-cover-generator](https://github.com/baoxinwen/halo-plugin-cover-generator)(GPL-3.0),沿用同一许可继续分发。上游 1.0.0 的原始记录保留在文末,便于对照。
 
-## [3.8.0] - 2026-10-31
+## [2.8.0] - 2026-10-31
 
 ### 修复
 

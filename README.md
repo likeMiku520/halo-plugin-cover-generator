@@ -4,7 +4,7 @@
 
 - 作者:fufu大王 · [blog.fufu520.cn](https://blog.fufu520.cn)
 - 许可:GPL-3.0
-- 当前版本:3.8.0（[更新日志](./CHANGELOG.md)）
+- 当前版本:2.8.0（[更新日志](./CHANGELOG.md)）
 - 环境要求:Halo `>=2.26.0`
 
 ## 功能

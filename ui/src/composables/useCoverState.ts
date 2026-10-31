@@ -281,21 +281,36 @@ function repairNewFields(
   return repaired
 }
 
-function load(): { state: CoverState; migrated: boolean } {
+/**
+ * 把不可信的状态对象收敛成合法状态。
+ *
+ * 存档读取与「方案」载入走同一条路：两者拿到的都是可能被手工编辑过的 JSON，
+ * 谁都不能直接塞进 state。返回 repaired 让调用方决定是否立即回写。
+ */
+export function adoptCoverState(raw: unknown): { state: CoverState; repaired: boolean } {
   try {
-    const raw = localStorage.getItem(KEY)
-    if (!raw) return { state: defaults(), migrated: false }
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    const migrated =
-      typeof parsed.title === 'string' && parsed.titleLeft === undefined
+    if (typeof raw !== 'object' || raw === null) return { state: defaults(), repaired: false }
+    const parsed = raw as Record<string, unknown>
+    const migrated = typeof parsed.title === 'string' && parsed.titleLeft === undefined
     const merged = migrate(parsed, defaults())
-    if (!isValidCover(merged)) return { state: defaults(), migrated: false }
+    if (!isValidCover(merged)) return { state: defaults(), repaired: false }
     // 类型合法但语义越界的内容级修复(评审#2/M2):空 stops 会产出不渲染的
     // <linearGradient>(背景消失且「止」取色器失效);越界 offset/字号/角度
     // 污染 UI 显示。修复保留其余字段,不做整档回退;修复即回写。
     const newFieldsRepaired = repairNewFields(merged as CoverState & Record<string, unknown>, parsed)
     const repaired = normalize(merged)
-    return { state: merged, migrated: migrated || newFieldsRepaired || repaired }
+    return { state: merged, repaired: migrated || newFieldsRepaired || repaired }
+  } catch {
+    return { state: defaults(), repaired: false }
+  }
+}
+
+function load(): { state: CoverState; migrated: boolean } {
+  try {
+    const raw = localStorage.getItem(KEY)
+    if (!raw) return { state: defaults(), migrated: false }
+    const { state, repaired } = adoptCoverState(JSON.parse(raw))
+    return { state, migrated: repaired }
   } catch {
     return { state: defaults(), migrated: false }
   }

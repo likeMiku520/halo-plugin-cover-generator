@@ -70,6 +70,48 @@ async function createAttachmentGroup(name: string): Promise<void> {
   }
 }
 
+/** Console 附件检索端点(与 Console 附件库列表是同一个接口,支持 keyword 检索) */
+const ATTACHMENT_LIST_PATH = '/apis/api.console.halo.run/v1alpha1/attachments'
+/** 附件扩展端点:删除单条附件走这里 */
+const ATTACHMENT_BASE_PATH = '/apis/storage.halo.run/v1alpha1/attachments'
+
+/** 附件列表项里本模块用到的字段 */
+interface AttachmentSummary {
+  metadata?: { name?: string }
+  spec?: { displayName?: string }
+}
+
+/**
+ * 找库里同名的旧附件。
+ *
+ * 上传接口只会「新建」:同名文件再传一次会在附件库里留下「xxx-cover.png」
+ * 「xxx-cover-1.png」一串副本。本地存储的落盘路径由显示名决定,所以删掉旧的
+ * 再用同一个名字上传,能拿回同一个 permalink —— 文章里的封面链接不会失效。
+ *
+ * 检索失败一律返回 null:查重是锦上添花,不能因为它让整次保存失败。
+ */
+async function findSameNameAttachment(filename: string): Promise<string | null> {
+  try {
+    const { data } = await axiosInstance.get(ATTACHMENT_LIST_PATH, {
+      params: { keyword: filename, page: 0, size: 30 },
+    })
+    const items = (data as { items?: AttachmentSummary[] }).items ?? []
+    const hit = items.find((it) => it.spec?.displayName === filename)
+    return hit?.metadata?.name || null
+  } catch {
+    return null
+  }
+}
+
+/** 删除单条附件;失败同样只吞掉,交给后续上传兜底 */
+async function deleteAttachmentByName(name: string): Promise<void> {
+  try {
+    await axiosInstance.delete(`${ATTACHMENT_BASE_PATH}/${encodeURIComponent(name)}`)
+  } catch {
+    // 删不掉也继续传:多一个副本好过整次保存失败
+  }
+}
+
 /**
  * 上传封面 PNG 到 Halo 附件库,返回 Console 会写入文章 cover 的附件链接
  * (status.permalink)。
@@ -96,6 +138,10 @@ export async function uploadCoverPng(
     const { data } = await axiosInstance.post(ATTACHMENT_UPLOAD_PATH, form)
     return data as AttachmentLike
   }
+
+  // 同名即覆盖:先删掉库里同名的那一份,再用同一个名字上传
+  const existing = await findSameNameAttachment(filename)
+  if (existing) await deleteAttachmentByName(existing)
 
   let attachment: AttachmentLike
   try {

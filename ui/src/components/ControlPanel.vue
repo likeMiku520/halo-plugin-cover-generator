@@ -4,9 +4,19 @@ import { FormKit } from '@formkit/vue'
 import type { CoverState } from '../lib/types'
 import type { SelectionId } from '../composables/useCanvasInteraction'
 import type { FontLike } from '../lib/svgBuilder'
+import { adoptCoverState } from '../composables/useCoverState'
 import { CANVAS_PRESETS, CUSTOM_CANVAS_PRESET, describeCanvas, presetOfId } from '../lib/canvasPresets'
 import { CANVAS, CANVAS_SIDE_MAX, CANVAS_SIDE_MIN } from '../lib/layout'
 import { fetchLogoAsDataUrl } from '../lib/logoFetcher'
+import {
+  SCHEME_NAME_MAX,
+  deleteScheme,
+  findScheme,
+  formatSchemeTime,
+  listSchemes,
+  saveScheme,
+  type SavedScheme,
+} from '../lib/schemes'
 import GradientPicker from './GradientPicker.vue'
 import ElementsPanel from './ElementsPanel.vue'
 import SliderField from './SliderField.vue'
@@ -35,6 +45,60 @@ const emit = defineEmits<{
 const uploadError = ref('')
 /** 代理兜底披露(评审 M3):本次导入走了公共代理时置位,界面明示第三方外发 */
 const proxyNotice = ref(false)
+
+/** ---- 方案:当前全部参数的命名快照 ---- */
+// 初始化即读:列表是首帧就要显示的持久数据,放到 onMounted 会先闪一下空态
+const schemes = ref<SavedScheme[]>(listSchemes())
+const schemeName = ref('')
+const schemeNotice = ref<{ kind: 'ok' | 'error'; text: string } | null>(null)
+const schemeNoticeText = computed(() => schemeNotice.value?.text ?? '')
+const schemeNoticeIsError = computed(() => schemeNotice.value?.kind === 'error')
+
+/** 列表以模块返回的「已落盘内容」为准,避免内存视图与 localStorage 分叉 */
+function refreshSchemes() {
+  schemes.value = listSchemes()
+}
+
+function notifyScheme(kind: 'ok' | 'error', text: string) {
+  schemeNotice.value = { kind, text }
+}
+
+function onSaveScheme() {
+  const result = saveScheme(schemeName.value, props.modelValue)
+  schemes.value = result.schemes
+  if (!result.ok) {
+    notifyScheme('error', result.message)
+    return
+  }
+  // 保存成功后清空输入,下一次保存的默认动作是「新方案」而不是再次覆盖
+  schemeName.value = ''
+  notifyScheme('ok', result.message)
+}
+
+/**
+ * 载入 = 整份状态替换。方案与存档一样是可能被手工编辑过的 JSON,
+ * 必须经 adoptCoverState 收敛后再交给受控组件外抛。
+ */
+function onLoadScheme(id: string) {
+  const scheme = findScheme(id)
+  if (!scheme) {
+    refreshSchemes()
+    notifyScheme('error', '方案不存在或已损坏，可能已被删除')
+    return
+  }
+  const { state, repaired } = adoptCoverState(scheme.state)
+  emit('update:modelValue', state)
+  notifyScheme(
+    'ok',
+    repaired ? `已载入「${scheme.name}」，并修正了其中无效的设置` : `已载入「${scheme.name}」`,
+  )
+}
+
+function onDeleteScheme(id: string) {
+  const result = deleteScheme(id)
+  schemes.value = result.schemes
+  notifyScheme(result.ok ? 'ok' : 'error', result.message)
+}
 
 function set(patch: Partial<CoverState>) {
   emit('update:modelValue', { ...props.modelValue, ...patch })
@@ -145,6 +209,64 @@ async function onPickAttachment(value: unknown) {
       <span v-if="fontStatus === 'loading'" class="meta font-status">字体加载中…</span>
       <span v-else-if="fontStatus === 'error'" class="meta font-status is-error">字体不可用</span>
     </header>
+
+    <!-- 方案放在最顶部:它操作的是「整份参数」,层级高于下面任何单个分区 -->
+    <div class="eyebrow">方案</div>
+    <section class="card" aria-label="方案">
+      <div class="lb">
+        <b>方案名</b>
+        <span class="meta">最多 {{ SCHEME_NAME_MAX }} 字 · 同名覆盖</span>
+      </div>
+      <div class="scheme-save">
+        <input
+          v-model="schemeName"
+          class="sd-field"
+          type="text"
+          :maxlength="SCHEME_NAME_MAX"
+          placeholder="例如：周报封面"
+          aria-label="方案名"
+          @keydown.enter.prevent="onSaveScheme"
+        />
+        <button type="button" class="sd-btn-quiet" aria-label="保存当前方案" @click="onSaveScheme">
+          保存当前方案
+        </button>
+      </div>
+      <p
+        v-if="schemeNoticeText"
+        class="scheme-notice"
+        :class="{ 'is-error': schemeNoticeIsError }"
+        role="status"
+      >
+        {{ schemeNoticeText }}
+      </p>
+      <p v-if="!schemes.length" class="hint">还没有保存的方案</p>
+      <ul v-else class="scheme-list" aria-label="已保存方案">
+        <li v-for="scheme in schemes" :key="scheme.id" class="scheme-item">
+          <div class="scheme-info">
+            <b class="scheme-name" :title="scheme.name">{{ scheme.name }}</b>
+            <span class="meta scheme-time">{{ formatSchemeTime(scheme.savedAt) }}</span>
+          </div>
+          <div class="scheme-actions">
+            <button
+              type="button"
+              class="sd-btn-ghost"
+              :aria-label="`载入方案 ${scheme.name}`"
+              @click="onLoadScheme(scheme.id)"
+            >
+              载入
+            </button>
+            <button
+              type="button"
+              class="sd-btn-ghost"
+              :aria-label="`删除方案 ${scheme.name}`"
+              @click="onDeleteScheme(scheme.id)"
+            >
+              删除
+            </button>
+          </div>
+        </li>
+      </ul>
+    </section>
 
     <div class="eyebrow">画布</div>
     <section class="card">
@@ -704,6 +826,72 @@ async function onPickAttachment(value: unknown) {
 .switch:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3.5px var(--sd-focus-ring);
+}
+
+/* ---- 方案卡:命名快照的保存 / 列表 / 载入 / 删除 ---- */
+.scheme-save {
+  display: flex;
+  gap: var(--pit-sp-2);
+  align-items: stretch;
+}
+.scheme-save input {
+  flex: 1;
+  min-width: 0;
+}
+.scheme-notice {
+  margin: var(--pit-sp-2) 0 0;
+  font-size: var(--sd-fs-sm);
+  line-height: 1.5;
+  color: var(--sd-text-2);
+}
+.scheme-notice.is-error {
+  color: var(--sd-danger-text);
+}
+.scheme-list {
+  list-style: none;
+  margin: var(--pit-sp-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.scheme-item {
+  display: flex;
+  align-items: center;
+  gap: var(--pit-sp-2);
+  padding: 6px 8px;
+  background: var(--sd-surface-raised);
+  border: 1px solid var(--sd-line);
+  border-radius: var(--sd-r-control);
+}
+.scheme-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--pit-sp-2);
+}
+.scheme-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--sd-fs-sm);
+  font-weight: 600;
+  color: var(--sd-text);
+}
+.scheme-time {
+  flex: 0 0 auto;
+}
+.scheme-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+}
+/* 行内小按钮:沿用 sd-btn-ghost 的材质,只收紧尺寸 */
+.scheme-actions button {
+  padding: 4px 8px;
+  font-size: var(--sd-fs-xs);
 }
 
 /* ---- 提示文本 ---- */

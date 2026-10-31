@@ -44,9 +44,12 @@ export default definePlugin({
           searchable: true,
           menu: {
             name: '封面生成器',
-            group: '工具',
+            // 放在顶层「dashboard」分组而不是「工具」:封面生成器是日常编辑流程的一环,
+            // 沉到工具分类里每次都要多找一层。priority 1 = 紧跟仪表盘之后
+            // CoreMenuGroupId 的合法取值见 @halo-dev/ui-shared: dashboard/content/interface/system/tool
+            group: 'dashboard',
             icon: markRaw(IconPalette),
-            priority: 0,
+            priority: 1,
           },
         },
       },

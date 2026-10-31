@@ -20,6 +20,8 @@ import ControlPanel from './ControlPanel.vue'
 import CoverPreview from './CoverPreview.vue'
 import OutputBar from './OutputBar.vue'
 import CanvasOverlay from './CanvasOverlay.vue'
+import HistoryBar from './HistoryBar.vue'
+import { useHistory } from '../composables/useHistory'
 
 /**
  * 内置字体资产地址:插件内默认走 JAR 静态资源(M7 出包,见 BUILTIN_FONT_URL);
@@ -34,6 +36,12 @@ const props = withDefaults(
 )
 
 const state = useCoverState()
+
+/**
+ * 撤销 / 重做。历史归 useHistory 所有,这个组件只负责把按钮接上:
+ * 一次连续拖动会被合并成一步(默认 400ms 静默窗口),不会拖一下产生几十步。
+ */
+const { undo, redo, canUndo, canRedo } = useHistory(state)
 
 /**
  * 画布交互。选中态只有这一份:面板点选与画布上按下元素都写到这里
@@ -497,6 +505,10 @@ const permalinkHref = computed(() =>
           ></CanvasOverlay>
         </CoverPreview>
       </div>
+      <!-- 撤销 / 重做:放在预览框**外面**的下方右侧,不压住画布 -->
+      <div class="history-row">
+        <HistoryBar :can-undo="canUndo" :can-redo="canRedo" @undo="undo" @redo="redo" />
+      </div>
       <OutputBar
         v-model:selected-post="selectedPost"
         :can-export="canExport"
@@ -589,6 +601,12 @@ const permalinkHref = computed(() =>
   min-height: 0;
   display: grid;
   place-items: center;
+}
+
+/* 撤销 / 重做:预览框外侧的右下角,不与画布争夺点击区 */
+.history-row {
+  display: flex;
+  justify-content: flex-end;
 }
 
 /* 本地存档落盘失败警示(persistError 非空时出现,恢复后自动消失) */

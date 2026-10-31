@@ -22,7 +22,9 @@ import {
   type HasSize, type SizeScale,
 } from './layout'
 import { readViewBox } from './svgSanitizer'
-import { layoutRun, measureTracked, runRenderedWidth, type RunLayout } from './textLayout'
+import {
+  layoutRun, measureTracked, runRenderedWidth, trackedMeasure, type RunLayout,
+} from './textLayout'
 
 /** 兼容旧引用：像素基准已迁至 lib/layout.ts，此别名保留以免下游导入路径断裂 */
 export const LAYOUT = CANVAS
@@ -248,7 +250,9 @@ export function wrapText(
 ): string[] {
   const paragraphs = text.split('\n')
   const lines: string[] = []
-  const width = (s: string) => measureTracked(measure, s, fontSize, trackPx)
+  // 断行宽度必须与绘制推进同一个口径:字距要算进占位,否则断出来的行比实际画出来的窄
+  const measured = trackedMeasure(measure, trackPx)
+  const width = (s: string) => measured(s, fontSize)
   for (const para of paragraphs) {
     const chars = [...para]
     if (chars.length === 0) {
@@ -334,6 +338,10 @@ function titleLayer(
   const layout: RunLayout = { curve: ts.curve, direction: ts.direction }
   const vertical = ts.direction === 'vertical'
   const trackOf = (fs: number) => fs * ts.tracking
+  // 断行 / 缩字号的判定必须与绘制同一个口径。绘制按 letter-spacing 逐字推进,
+  // 判定若仍按纯字宽,字距一加行就会排得比实际画出来的更宽:文字溢出画布而框认为没超。
+  // 字距是 em 比例,基准字号处取一次即可——fitFontSize 与 wrapText 都只在这个字号上试探。
+  const baseTrackPx = trackOf(base)
   // 两个方向各只有一个预算量起作用:竖排读可用高度(一列排满就换列),横排读可用宽度(放不下就压缩)。
   // 用不上的那一轴置 0,表示「不限」——排版引擎因此不必知道画布尺寸,这里也不必写两套分支。
   const budgetW = vertical ? 0 : maxW
@@ -359,7 +367,7 @@ function titleLayer(
   if (state.titleMode === 'flow') {
     // 竖排不做横向断行:整段交给排版引擎按可用高度换列(按宽度断行只会得到一排并列的短列),
     // 文本里的 \n 在那里就是强制换列;横排仍按宽度断行后逐行居中排布
-    const lines = vertical ? [flow] : wrapText(flow, maxW, base, measure)
+    const lines = vertical ? [flow] : wrapText(flow, maxW, base, measure, baseTrackPx)
     const lineHeight = Math.round(base * 1.18)
     // 整块以锚点为竖直中心：行数增加时向上向下对称展开
     const firstBaseline = baseline - ((lines.length - 1) * lineHeight) / 2
@@ -377,7 +385,8 @@ function titleLayer(
     const joined = `${left}${right}`
     const { fontSize } = vertical
       ? { fontSize: base }
-      : fitFontSize(joined, maxW, { base, min: minSize }, measure)
+      // 缩字号的度量同样带字距:否则字距占了宽度,字号却一点不缩,只能事后横向压扁
+      : fitFontSize(joined, maxW, { base, min: minSize }, trackedMeasure(measure, baseTrackPx))
     return finish(layoutRun(
       font, joined, cx, baseline, fontSize, trackOf(fontSize),
       ts.color, 'middle', ts.bold, budgetW, budgetH, layout,
@@ -391,7 +400,8 @@ function titleLayer(
   const segMax = segmentMaxWidth(ctx) * ax.scale
   const scaleOfText = (s: string) => {
     if (!s) return 1
-    const w = measure(s, base)
+    // 段宽判定带字距:字号要按「字距也算进占位」后的实际宽度来缩
+    const w = measureTracked(measure, s, base, baseTrackPx)
     return w <= segMax ? 1 : segMax / w
   }
   // 字号不低于下限时允许的最大缩放；超出部分改由水平压缩吸收。
@@ -449,15 +459,24 @@ export function titleGeometry(
   const base = Math.min(CANVAS.TITLE_BASE, Math.max(CANVAS.TITLE_MIN, state.titleFontSize)) * ctx.s.h
   const minSize = CANVAS.TITLE_MIN * ctx.s.h
   const maxW = fullMaxWidth(ctx) * ax.scale
+  const ts = textStyleOf(state, 'title')
+  const trackOf = (fs: number) => fs * ts.tracking
+  // 这里的每一个宽度都必须是「实际绘制出来的推进量」:选中框按它画,文字也按它排。
+  // 之前这里全部用的是纯字宽,于是字距一调,框宽纹丝不动,而产物里的 letter-spacing 照旧变化。
+  const baseTrackPx = trackOf(base)
 
   if (state.titleMode === 'flow') {
-    const lines = wrapText(flow, maxW, base, measure)
+    // 与 titleLayer 同一调用:断行宽度带字距,框宽才有意义
+    const lines = wrapText(flow, maxW, base, measure, baseTrackPx)
     return {
       fontSize: base,
       seamHalf: 0,
       leftWidth: 0,
       rightWidth: 0,
-      totalWidth: Math.min(maxW, Math.max(...lines.map((l) => measure(l, base)), 0)),
+      totalWidth: Math.min(
+        maxW,
+        Math.max(...lines.map((l) => measureTracked(measure, l, base, baseTrackPx)), 0),
+      ),
       lineHeight: Math.round(base * 1.18),
       lineCount: Math.max(1, lines.length),
     }
@@ -465,11 +484,14 @@ export function titleGeometry(
 
   if (state.logoHidden) {
     const joined = `${left}${right}`
-    const { fontSize } = fitFontSize(joined, maxW, { base, min: minSize }, measure)
+    // 与 titleLayer 同一个含字距度量:否则框会按带字距量出来、字号却按纯字宽缩,两边又对不上
+    const { fontSize } = fitFontSize(
+      joined, maxW, { base, min: minSize }, trackedMeasure(measure, baseTrackPx),
+    )
     return {
       fontSize,
       seamHalf: 0, leftWidth: 0, rightWidth: 0,
-      totalWidth: Math.min(maxW, measure(joined, fontSize)),
+      totalWidth: Math.min(maxW, measureTracked(measure, joined, fontSize, trackOf(fontSize))),
       lineHeight: Math.round(fontSize * 1.18),
       lineCount: 1,
     }
@@ -478,7 +500,8 @@ export function titleGeometry(
   const segMax = segmentMaxWidth(ctx) * ax.scale
   const scaleOfText = (s: string) => {
     if (!s) return 1
-    const w = measure(s, base)
+    // 与 titleLayer 同一条判定:段宽含字距,字号才缩到与绘制一致的位置
+    const w = measureTracked(measure, s, base, baseTrackPx)
     return w <= segMax ? 1 : segMax / w
   }
   const minSizeScale = minSize / base
@@ -488,11 +511,19 @@ export function titleGeometry(
     : Math.sqrt(factors.reduce((a, b) => a * b, 1))
   const clamped = Math.min(1, Math.max(minSizeScale, shared))
   const fontSize = Math.max(minSize, Math.round(base * clamped))
-  // 与 titleLayer 同源：字号被下限截住后，剩余比例转为水平压缩
+  // 与 titleLayer 同源：字号被下限截住后，剩余比例转为水平压缩。
+  // 段宽按字号对应的字距算(字距随字号线性缩放,故 compress 后的占位同一口径)
   const compress = clamped > 0 ? clamped / (fontSize / base) : 1
   const segHalf = byWidth(state.seamGap, ctx.s) / 2
-  const leftWidth = left ? measure(left, fontSize) * compress : 0
-  const rightWidth = right ? measure(right, fontSize) * compress : 0
+  // 除 compress 外,渲染端 layoutRun 还会把仍然超宽的段压到单侧预算(segMax)内:
+  // 字号触底后宁可横向压扁也不越界。这里补上同一个 min,否则框会比实际画出来的宽出数倍
+  // (字距越大越明显),又变成另一种脱节。
+  const leftWidth = left
+    ? Math.min(segMax, measureTracked(measure, left, fontSize, trackOf(fontSize))) * compress
+    : 0
+  const rightWidth = right
+    ? Math.min(segMax, measureTracked(measure, right, fontSize, trackOf(fontSize))) * compress
+    : 0
   return {
     fontSize,
     seamHalf: segHalf,
@@ -521,7 +552,9 @@ function subTitleLayer(
   // 竖排改按可用高度换列:预算与横排同一比例,只是换到纵轴(装饰线在竖排里不画,故不必为它们收窄)
   const textMaxH = vertical ? verticalTextMaxHeight('subtitle', ctx, ax.scale) : 0
   const trackPxOf = (sz: number) => sz * ts.tracking
-  const mTracked = (t: string, sz: number) => measureTracked(measure, t, sz, trackPxOf(sz))
+  // 含字距的度量只从 trackedMeasure 派生:手拼一遍 measureTracked 就等于留下第二份公式,
+  // 缩字号与命中框迟早会有一处漏掉字距
+  const mTracked = trackedMeasure(measure, trackPxOf)
   // 大小倍率必须作用到字号本身:此前只用它缩窄了可用宽度,滑杆拖到底字号也不变
   // (实机反馈「副标题大小改了没效果」)
   const subBase = byHeight(CANVAS.SUB_BASE, ctx.s) * ax.scale

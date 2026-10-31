@@ -18,14 +18,12 @@ vi.mock('@halo-dev/api-client', () => ({
     get: vi.fn<(url: string) => Promise<unknown>>(),
     post: vi.fn<(url: string, data: unknown) => Promise<unknown>>(),
     put: vi.fn<(url: string, data: unknown) => Promise<unknown>>(),
-    delete: vi.fn<(url: string) => Promise<unknown>>(),
   },
 }))
 
 const mockedPost = vi.mocked(axiosInstance.post)
 const mockedGet = vi.mocked(axiosInstance.get)
 const mockedPut = vi.mocked(axiosInstance.put)
-const mockedDelete = vi.mocked(axiosInstance.delete)
 
 /**
  * 完整还原 2026-09-06 对真实 haloServer 的 spike 响应
@@ -127,7 +125,6 @@ afterEach(() => {
   mockedPost.mockReset()
   mockedGet.mockReset()
   mockedPut.mockReset()
-  mockedDelete.mockReset()
 })
 
 describe('uploadCoverPng', () => {
@@ -207,10 +204,7 @@ describe('uploadCoverPng 的附件分组按需创建', () => {
       uploadCoverPng(new Blob(['x'], { type: 'image/png' }), 'a.png', SETTINGS),
     ).resolves.toEqual({ permalink: '/upload/我的标题-cover.png' })
 
-    // 现在唯一允许的 GET 是「同名覆盖」的附件检索;分组预检查仍然一次都不发
-    const groupCalls = mockedGet.mock.calls.filter(([url]) => String(url).includes('/groups'))
-    expect(groupCalls).toHaveLength(0)
-    expect(mockedDelete).not.toHaveBeenCalled()
+    expect(mockedGet).not.toHaveBeenCalled()
     expect(mockedPost).toHaveBeenCalledOnce()
     expect(mockedPost.mock.calls[0][0]).toBe('/apis/api.console.halo.run/v1alpha1/attachments/upload')
   })
@@ -542,52 +536,5 @@ describe('updatePostCover', () => {
     await expect(updatePostCover('gone', '/upload/c.png')).rejects.toThrow('绑定文章封面失败')
     expect(mockedGet).toHaveBeenCalledTimes(2) // 首次 + 冲突后重取
     expect(mockedPut).toHaveBeenCalledTimes(1) // 重取失败即终止
-  })
-})
-
-describe('uploadCoverPng 同名即覆盖', () => {
-  const png = () => new Blob(['png'], { type: 'image/png' })
-  const sameName = () => ({
-    data: {
-      items: [{ metadata: { name: 'att-1' }, spec: { displayName: '标题-cover.png' } }],
-    },
-  })
-
-  it('库里已有同名附件时,先删旧的再用同一个名字上传', async () => {
-    mockedGet.mockResolvedValue(sameName() as never)
-    mockedPost.mockResolvedValue(okResponse(MEASURED_ATTACHMENT))
-    await uploadCoverPng(png(), '标题-cover.png', SETTINGS)
-
-    expect(mockedGet).toHaveBeenCalledOnce()
-    expect(mockedGet.mock.calls[0][0]).toBe('/apis/api.console.halo.run/v1alpha1/attachments')
-    expect(mockedDelete).toHaveBeenCalledWith('/apis/storage.halo.run/v1alpha1/attachments/att-1')
-    // 删除必须早于上传:否则仍会先建出一个副本
-    expect(mockedDelete.mock.invocationCallOrder[0])
-      .toBeLessThan(mockedPost.mock.invocationCallOrder[0])
-  })
-
-  it('没有同名附件时不删除', async () => {
-    mockedGet.mockResolvedValue({
-      data: { items: [{ metadata: { name: 'att-9' }, spec: { displayName: '别的-cover.png' } }] },
-    } as never)
-    mockedPost.mockResolvedValue(okResponse(MEASURED_ATTACHMENT))
-    await uploadCoverPng(png(), '标题-cover.png', SETTINGS)
-    expect(mockedDelete).not.toHaveBeenCalled()
-  })
-
-  it('检索失败不能拖垮保存:退化成一个副本,附件照常返回', async () => {
-    mockedGet.mockRejectedValue(new Error('boom'))
-    mockedPost.mockResolvedValue(okResponse(MEASURED_ATTACHMENT))
-    const { permalink } = await uploadCoverPng(png(), '标题-cover.png', SETTINGS)
-    expect(mockedDelete).not.toHaveBeenCalled()
-    expect(permalink).toMatch(/^\/upload\//)
-  })
-
-  it('删除失败也继续上传', async () => {
-    mockedGet.mockResolvedValue(sameName() as never)
-    mockedDelete.mockRejectedValue(new Error('nope'))
-    mockedPost.mockResolvedValue(okResponse(MEASURED_ATTACHMENT))
-    await uploadCoverPng(png(), '标题-cover.png', SETTINGS)
-    expect(mockedPost).toHaveBeenCalledOnce()
   })
 })

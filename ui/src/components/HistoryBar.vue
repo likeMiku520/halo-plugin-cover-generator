@@ -39,7 +39,7 @@ function emitRedo() {
       :aria-disabled="!canUndo"
       @click="emitUndo"
     >
-      <svg class="hb-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <svg class="hb-icon" width="18" height="18" viewBox="0 0 14 14" fill="none" aria-hidden="true">
         <path
           d="M5.4 2.4 2.4 5.4l3 3"
           stroke="currentColor"
@@ -63,7 +63,7 @@ function emitRedo() {
       :aria-disabled="!canRedo"
       @click="emitRedo"
     >
-      <svg class="hb-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <svg class="hb-icon" width="18" height="18" viewBox="0 0 14 14" fill="none" aria-hidden="true">
         <path
           d="M8.6 2.4 11.6 5.4l-3 3"
           stroke="currentColor"
@@ -91,16 +91,16 @@ function emitRedo() {
   gap: 4px;
 }
 
-/* 图标按钮:28×28 命中区,视觉只靠图标本身,不画常驻外框。
+/* 图标按钮:36×36 命中区(放大后更好点),视觉只靠图标本身,不画常驻外框。
  * 颜色只取现有令牌:文字档(--sd-text*)、描线档(--sd-line)、
  * 主题青一族(--sd-accent*),不引入新色 */
 .hb-btn {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  min-height: 28px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
   padding: 0;
   border: none;
   border-radius: var(--sd-r-small);

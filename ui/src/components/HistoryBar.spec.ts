@@ -83,7 +83,7 @@ describe('HistoryBar 结构与可访问名称', () => {
     wrapper.unmount()
   })
 
-  it('图标是 14×14 的内联 SVG 弯箭头,按钮内没有文字', () => {
+  it('图标是内联 SVG 弯箭头(放大到 18×18),按钮内没有文字', () => {
     const wrapper = mountBar()
 
     for (const selector of Object.values(SELECTOR)) {
@@ -92,8 +92,9 @@ describe('HistoryBar 结构与可访问名称', () => {
 
       const svg = button.find('svg')
       expect(svg.exists()).toBe(true)
-      expect(svg.attributes('width')).toBe('14')
-      expect(svg.attributes('height')).toBe('14')
+      // 视觉尺寸放大到 18,viewBox 仍是 14(路径按比例缩放)
+      expect(svg.attributes('width')).toBe('18')
+      expect(svg.attributes('height')).toBe('18')
       expect(svg.attributes('viewBox')).toBe('0 0 14 14')
 
       const paths = svg.findAll('path')

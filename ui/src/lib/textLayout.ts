@@ -76,6 +76,30 @@ export function measureTracked(
   return measure(s, fontSize) + trackPx * Math.max(0, n - 1)
 }
 
+/** 字距来源:固定像素,或「字号 → 字距」(即字距按 em 比例给,随字号一起缩放) */
+export type TrackPx = number | ((fontSize: number) => number)
+
+/**
+ * 把「纯字宽」的度量包装成「含字距」的度量。
+ *
+ * 排版判定(断行、缩字号、命中框)与绘制推进必须是同一个口径:
+ * 绘制按 letter-spacing 逐字推进,判定若仍按纯字宽,选中框就会恒宽不随字距变化,
+ * 与实际画出来的文字脱节;反过来只把框加宽、换行与缩字号仍按纯字宽算,
+ * 则会出现「框里放得下、字却溢出画布」——两种都是同一类错位。
+ *
+ * 不要在这里重写加法:底层一律复用 measureTracked,字距只由这一层叠加,
+ * measure 本身仍是「纯字宽」,调用方拿它做与字距无关的判断时不会被悄悄改语义。
+ *
+ * trackPx 允许传函数:业务上的字距是 em 比例(字号 × 比例),
+ * 而 fitFontSize 这类会拿字号来试探的调用方需要「字号变、字距跟着变」的度量;
+ * 固定像素只对单一字号成立,传错就会在缩放后偏离实际绘制。
+ */
+export function trackedMeasure(measure: MeasureText, trackPx: TrackPx): MeasureText {
+  return typeof trackPx === 'number'
+    ? (s, fontSize) => measureTracked(measure, s, fontSize, trackPx)
+    : (s, fontSize) => measureTracked(measure, s, fontSize, trackPx(fontSize))
+}
+
 /** 单字在该段中的横向占位 */
 interface GlyphAdvance {
   char: string

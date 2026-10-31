@@ -4,6 +4,7 @@ import { buildCoverSvg, LAYOUT } from './svgBuilder'
 import { REF_H, REF_W, defaultCoverState, defaultTextStyles } from './layout'
 import { parseFont, type OpentypeFont } from './fontLoader'
 import { makeCoverState } from './coverState'
+import type { CoverState } from './types'
 
 // 字体已出包至插件 JAR 静态资源(M7),测试直接从仓库内该位置读取
 const FONT_PATH = '../src/main/resources/static/fonts/DouyinSansBold.otf'
@@ -738,5 +739,139 @@ describe.skipIf(!hasFont)('buildCoverSvg 竖排换列(真实字体)', () => {
     expect(spanX).toBeLessThan(210)
     // 单列居中在锚点 x = 600 上
     expect((Math.min(...xs) + Math.max(...xs)) / 2).toBeCloseTo(600, 0)
+  })
+})
+
+/**
+ * 标题字间距的渲染侧。
+ *
+ * 绘制按 letter-spacing 逐字推进,所以断行与缩字号也必须用带字距的度量:
+ * 否则框按带字距量、字却按纯字宽排,文字会溢出画布。几何侧的同口径断言在
+ * elementGeometry.spec.ts,这里锁「产物自己怎么排」。
+ * 全部走无字体路径:每行/每段就是一个 <text>,字距与占位可以直接从属性读出来。
+ */
+describe('buildCoverSvg 标题字间距', () => {
+  const CANVAS = { width: 1200, height: 630 }
+  /** 参考画布下整块标题的可用宽度 1200 × 0.9333 */
+  const FULL_MAX = 1200 * LAYOUT.FULL_MAX_FRACTION
+  /** 单侧可用宽度 1200 × 0.4333 */
+  const SEG_MAX = 1200 * LAYOUT.SEG_MAX_FRACTION
+
+  const withTracking = (tracking: number, patch: Partial<CoverState>) => makeCoverState({
+    canvas: CANVAS,
+    ...patch,
+    textStyles: {
+      ...defaultTextStyles(),
+      title: { ...defaultTextStyles().title, tracking },
+    },
+  })
+
+  /** 读产物里的每行文字:字距 + 字号折算成实际占位(与无字体度量 0.55em/字同源) */
+  const textsIn = (svg: string) =>
+    [...svg.matchAll(/<text ([^>]*)>([^<]*)<\/text>/g)].map(([, attrs, content]) => {
+      const attr = (name: string) => Number(new RegExp(`${name}="([-\\d.]+)"`).exec(attrs)![1])
+      const fontSize = attr('font-size')
+      const count = [...content].length
+      return {
+        attrs,
+        content,
+        x: attr('x'),
+        fontSize,
+        spacing: attr('letter-spacing'),
+        width: count * fontSize * 0.55 + attr('letter-spacing') * Math.max(0, count - 1),
+      }
+    })
+
+  it('整块模式:字距计入断行宽度,行数增加且每行都放得下', () => {
+    const state = withTracking(1.5, {
+      titleMode: 'flow', titleFlow: 'A'.repeat(19), titleFontSize: 105,
+    })
+    const lines = textsIn(buildCoverSvg({ state, font: null, defaultLogoDataUrl: '' }))
+    // 基字号 105、字距 157.5:5 个字 = 918.75 ≤ 1119.96,第 6 个到 1134 就超了
+    expect(lines.map((l) => l.content)).toEqual(['AAAAA', 'AAAAA', 'AAAAA', 'AAAA'])
+    for (const line of lines) {
+      expect(line.spacing).toBeCloseTo(157.5, 5)
+      expect(line.width).toBeLessThanOrEqual(FULL_MAX + 1e-6)
+      // 断行已让它放得下,不需要 textLength 事后压扁
+      expect(line.attrs).not.toContain('textLength')
+      // 每行居中在锚点上(降级产物是 text-anchor="start",x 即左缘),且不出画布
+      expect(line.x).toBeCloseTo((CANVAS.width - line.width) / 2, 1)
+      expect(line.x).toBeGreaterThanOrEqual(-1e-6)
+      expect(line.x + line.width).toBeLessThanOrEqual(CANVAS.width + 1e-6)
+    }
+  })
+
+  it('无 Logo 合并标题:字距计入宽度后按比例缩小字号,而不是压扁一行', () => {
+    const state = withTracking(1.5, {
+      titleMode: 'split', titleLeft: 'A'.repeat(8), titleRight: '', logoHidden: true,
+      titleFontSize: 105,
+    })
+    const [line] = textsIn(buildCoverSvg({ state, font: null, defaultLogoDataUrl: '' }))
+    // 105 号时带字距宽 1564.5 > 1119.96 ⇒ 缩到 75 号,实际占位 1117.5
+    expect(line.fontSize).toBe(75)
+    expect(line.spacing).toBeCloseTo(112.5, 5)
+    expect(line.width).toBeCloseTo(1117.5, 5)
+    expect(line.attrs).not.toContain('textLength')
+    expect(line.x).toBeCloseTo((CANVAS.width - line.width) / 2, 1)
+  })
+
+  it('分缝模式:左右两段各带自己的字距,仍贴齐中缝', () => {
+    const state = withTracking(0.3, {
+      titleMode: 'split', titleLeft: 'AB', titleRight: 'CD', titleFontSize: 210,
+    })
+    const [left, right] = textsIn(buildCoverSvg({
+      state, font: null, defaultLogoDataUrl: 'data:image/png;base64,AAA',
+    }))
+    const seam = CANVAS.width / 2
+    const half = LAYOUT.SEAM_GAP / 2
+    // 基字号 210、字距 63:每段宽 = 2×115.5 + 63 = 294
+    expect(left.width).toBeCloseTo(294, 5)
+    expect(right.width).toBeCloseTo(294, 5)
+    expect(left.spacing).toBeCloseTo(63, 5)
+    expect(right.spacing).toBeCloseTo(63, 5)
+    // 左段 end 锚定在中缝左侧、右段 start 锚定在中缝右侧
+    expect(left.x + left.width).toBeCloseTo(seam - half, 5)
+    expect(right.x).toBeCloseTo(seam + half, 5)
+    // 两段都在单侧可用宽度内,字距不会把任何一段挤出去
+    expect(left.width).toBeLessThanOrEqual(SEG_MAX + 1e-6)
+    expect(right.width).toBeLessThanOrEqual(SEG_MAX + 1e-6)
+  })
+})
+
+/**
+ * 真实字体走的是 <path> 而不是 <text>:字号加载成功时,逐字推进量编码在字形坐标里,
+ * 与降级路径是两套输出。字距在两个路径上都必须进入排版判定,这里补上字体侧的证据。
+ */
+describe.skipIf(!hasFont)('buildCoverSvg 标题字间距(真实字体)', () => {
+  const CANVAS = { width: 1200, height: 630 }
+
+  const titleState = (flow: string, tracking: number) => makeCoverState({
+    canvas: CANVAS, titleMode: 'flow', titleFlow: flow, titleFontSize: 210,
+    textStyles: {
+      ...defaultTextStyles(),
+      title: { ...defaultTextStyles().title, tracking },
+    },
+  })
+
+  it('字距写进逐字路径推进:字形跨度按字距变宽', () => {
+    const span = (tracking: number) => {
+      const svg = buildCoverSvg({
+        state: titleState('排版', tracking), font: getFont(), defaultLogoDataUrl: '',
+      })
+      const path = /<path transform="([^"]*)" d="([^"]*)"/.exec(svg)!
+      return pathWidth(path[1], path[2])
+    }
+    // 两个字之间只有一个间隔:210 号字、字距 0.3 ⇒ 跨度正好多出 63px
+    expect(span(0.3) - span(0)).toBeCloseTo(210 * 0.3, 1)
+  })
+
+  it('整块模式:带字距的宽度决定断行,各行都放得下因此不会被压缩', () => {
+    const svg = buildCoverSvg({
+      state: titleState('一二三四五六', 1.5), font: getFont(), defaultLogoDataUrl: '',
+    })
+    // 210 号字 + 315 字距:两个字占 735 ≤ 1119.96,第三个字到 1260 就超了 ⇒ 三行各两字
+    const paths = [...svg.matchAll(/<path transform="([^"]*)" d="[^"]*"/g)]
+    expect(paths).toHaveLength(3)
+    for (const path of paths) expect(path[1]).not.toContain('scale(')
   })
 })

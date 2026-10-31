@@ -591,6 +591,8 @@ const permalinkHref = computed(() =>
 
 /* 右列:预览窗占满余量,输出动作条贴其下方(V2:S1 输出右置) */
 .stage-col {
+  /* 预览宽度上限的唯一来源:预览框与下方撤销/重做条都读它 */
+  --preview-max-w: 980px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -603,8 +605,12 @@ const permalinkHref = computed(() =>
   place-items: center;
 }
 
-/* 撤销 / 重做:预览框外侧的右下角,不与画布争夺点击区 */
+/* 撤销 / 重做:与预览同宽同位置、右对齐,并往上贴近预览框;
+ * 宽度用同一个变量,避免预览上限一改这里就对不齐 */
 .history-row {
+  width: min(100%, var(--preview-max-w, 980px));
+  margin-inline: auto;
+  margin-top: calc(-1 * var(--pit-sp-2));
   display: flex;
   justify-content: flex-end;
 }

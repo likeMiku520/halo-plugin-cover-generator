@@ -215,7 +215,7 @@ async function onPickAttachment(value: unknown) {
     <section class="card" aria-label="方案">
       <div class="lb">
         <b>方案名</b>
-        <span class="meta">最多 {{ SCHEME_NAME_MAX }} 字 · 同名覆盖</span>
+        <span class="meta">{{ schemeName.length }} / {{ SCHEME_NAME_MAX }}</span>
       </div>
       <div class="scheme-save">
         <input

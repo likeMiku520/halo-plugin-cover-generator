@@ -61,7 +61,7 @@ const innerStyle = computed(() => ({
 
 /* macOS 风预览窗:半透明材质 + 红绿灯窗控 */
 .window {
-  width: min(100%, 980px);
+  width: min(100%, var(--preview-max-w, 980px));
   border-radius: var(--sd-r-window);
   overflow: hidden;
   background: var(--sd-surface-panel);

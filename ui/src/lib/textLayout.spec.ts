@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CURVE_MAX_SWEEP, STRAIGHT, estimateAdvance, layoutRun, measureTracked, runRenderedWidth,
-  verticalColumns, verticalStep,
+  trackedMeasure, verticalColumns, verticalStep,
 } from './textLayout'
 
 /** 固定步进的假字体:每字宽 0.5em、每字一条 M 命令,便于精确断言排布结果 */
@@ -294,5 +294,29 @@ describe('度量', () => {
   it('无字体时的字宽估算:全角 1em、半角 0.55em', () => {
     expect(estimateAdvance('中', 40)).toBe(40)
     expect(estimateAdvance('a', 40)).toBeCloseTo(22, 5)
+  })
+})
+
+describe('trackedMeasure', () => {
+  const measure = (t: string, s: number) => t.length * s * 0.5
+
+  it('固定字距:与 measureTracked 同一口径(首字前不加字距)', () => {
+    const m = trackedMeasure(measure, 10)
+    // 纯字宽 3 × 40 × 0.5 = 60,再加 2 个间隔 × 10
+    expect(m('abc', 40)).toBe(80)
+    expect(m('a', 40)).toBe(20)
+    expect(m('', 40)).toBe(0)
+  })
+
+  it('按字号取字距:字距随字号一起缩放(em 比例的字距要这样传)', () => {
+    const m = trackedMeasure(measure, (sz) => sz * 0.5)
+    // 40 号:字宽 60 + 字距 20 × 2;20 号:字宽 30 + 字距 10 × 2
+    expect(m('abc', 40)).toBe(100)
+    expect(m('abc', 20)).toBe(50)
+  })
+
+  it('零字距时不改变纯字度的语义', () => {
+    const m = trackedMeasure(measure, 0)
+    expect(m('abcd', 40)).toBe(measure('abcd', 40))
   })
 })
